@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\KyleWakayama\\\\Desktop\\\\snowpeak-workshops\" -Recurse -Include \"*.ts\", \"*.tsx\", \"*.js\", \"*.json\")",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(Sort-Object)",
+      "Bash(node -e \"const p = require\\('./node_modules/next/package.json'\\); console.log\\(p.version\\)\")",
+      "Bash(npm run *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(vercel --prod)",
+      "Bash(npm install *)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\('peerDependencies',{}\\), indent=2\\)\\)\")",
+      "Bash(node -e \"const d = require\\('./node_modules/next-pwa/package.json'\\); console.log\\(JSON.stringify\\(d.peerDependencies, null, 2\\)\\)\")",
+      "Bash(node -e \"const m = require\\('./node_modules/next/dist/lib/metadata/types/metadata-interface.d.ts'\\); console.log\\('ok'\\)\")"
+    ]
+  }
+}

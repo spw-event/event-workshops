@@ -25,7 +25,7 @@ export default function AdminPage() {
   const [newGuest, setNewGuest] = useState({ name: '', email: '', ticket_type_id: '' })
   const [guestMsg, setGuestMsg] = useState(null)
   const [addingGuest, setAddingGuest] = useState(false)
-  const [guestSubTab, setGuestSubTab] = useState('add')
+  const [guestSubTab, setGuestSubTab] = useState('list')
   const [bulkCSV, setBulkCSV] = useState('')
   const [bulkPreview, setBulkPreview] = useState([])
   const [bulkMsg, setBulkMsg] = useState(null)
@@ -42,10 +42,16 @@ export default function AdminPage() {
   const [editWorkshopData, setEditWorkshopData] = useState({})
   const [savingWorkshop, setSavingWorkshop] = useState(false)
 
-  const [newSession, setNewSession] = useState({ workshop_id: '', date: '', start_time: '', end_time: '', capacity: 30 })
-  const [sessionMsg, setSessionMsg] = useState(null)
-  const [addingSession, setAddingSession] = useState(false)
   const [editingCapacity, setEditingCapacity] = useState({})
+  const [expandedWorkshops, setExpandedWorkshops] = useState({})
+
+  const [openMoments, setOpenMoments] = useState([])
+  const [newMoment, setNewMoment] = useState({ name: '', description: '', location: '', date: '', start_time: '', end_time: '', moment_type: 'optional' })
+  const [momentMsg, setMomentMsg] = useState(null)
+  const [addingMoment, setAddingMoment] = useState(false)
+  const [workshopSessionForms, setWorkshopSessionForms] = useState({})
+  const [addingSessionFor, setAddingSessionFor] = useState(null)
+  const [sessionMsgFor, setSessionMsgFor] = useState({})
 
 const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '', party_cap: 1, credits_per_person: 2, description: '' })
   const [ticketMsg, setTicketMsg] = useState(null)
@@ -66,6 +72,8 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
 
   const [settingsMsg, setSettingsMsg] = useState(null)
   const [newPins, setNewPins] = useState({ super_admin_pin: '', admin_pin: '' })
+
+  const [checkinSearch, setCheckinSearch] = useState('')
 
   // ── AUTH ─────────────────────────────────────────────────
   async function checkPin() {
@@ -106,7 +114,7 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
     const [
       { data: g }, { data: tt }, { data: w },
       { data: s }, { data: r }, { data: e },
-      { data: ip }, { data: ge }
+      { data: ip }, { data: ge }, { data: om }
     ] = await Promise.all([
       supabase.from('guests').select('*, ticket_types(*)').order('name'),
       supabase.from('ticket_types').select('*').order('name'),
@@ -115,7 +123,8 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
       supabase.from('registrations').select('*, guests(*), sessions(*, workshops(*))').neq('status', 'cancelled'),
       supabase.from('events').select('*').order('start_date'),
       supabase.from('instructor_pins').select('*, workshops(*)').order('name'),
-      supabase.from('guest_events').select('*, guests(*), events(*)')
+      supabase.from('guest_events').select('*, guests(*), events(*)'),
+      supabase.from('open_moments').select('*').order('date').order('start_time')
     ])
     setGuests(g || [])
     setTicketTypes(tt || [])
@@ -125,14 +134,26 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
     setEvents(e || [])
     setInstructorPins(ip || [])
     setGuestEvents(ge || [])
+    setOpenMoments(om || [])
     if (e && e.length > 0 && !selectedEvent) {
-      const upcoming = e.find(ev => ev.status === 'upcoming' || ev.status === 'active') || e[0]
+      const upcoming = e.find(ev => !isPastEvent(ev) && (ev.status === 'upcoming' || ev.status === 'active'))
+        || e.find(ev => !isPastEvent(ev))
+        || e[0]
       setSelectedEvent(upcoming)
-      setNewSession(ns => ({ ...ns, date: upcoming.start_date }))
     }
   }
 
   // ── HELPERS ───────────────────────────────────────────────
+  function getSessionForm(workshopId) {
+    const stored = workshopSessionForms[workshopId]
+    return { date: selectedEvent?.start_date || '', start_time: '', end_time: '', capacity: 30, ...stored }
+  }
+
+  function isPastEvent(ev) {
+    if (!ev?.end_date) return false
+    return ev.end_date < new Date().toISOString().slice(0, 10)
+  }
+
   function formatTime(t) {
     if (!t) return ''
     const [h, m] = t.split(':')
@@ -155,8 +176,10 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
 
   function getGuestCreditsUsed(guestId) {
     if (!selectedEvent) return 0
-    const ge = guestEvents.find(ge => ge.guest_id === guestId && ge.event_id === selectedEvent.id)
-    return ge?.credits_used || 0
+    const eventSessionIds = new Set(filteredSessions.map(s => s.id))
+    return registrations
+      .filter(r => r.guest_id === guestId && r.status === 'confirmed' && eventSessionIds.has(r.session_id))
+      .reduce((sum, r) => sum + (r.party_size || 1), 0)
   }
 
   function downloadCSV(rows, filename) {
@@ -194,6 +217,10 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
   const filteredRegs = selectedEvent
     ? registrations.filter(r => r.event_id === selectedEvent.id)
     : registrations
+
+  const filteredMoments = selectedEvent
+    ? openMoments.filter(m => m.event_id === selectedEvent.id)
+    : openMoments
 
 const filteredGuests = guests.filter(g => {
     const matchSearch = g.name.toLowerCase().includes(guestSearch.toLowerCase()) ||
@@ -311,25 +338,55 @@ const filteredGuests = guests.filter(g => {
     setSavingWorkshop(false)
   }
 
-  async function addSession() {
-    if (!newSession.workshop_id || !newSession.start_time || !newSession.end_time || !selectedEvent) {
-      setSessionMsg({ type: 'error', text: 'All fields required.' }); return
+  async function addInlineSession(workshopId) {
+    const form = getSessionForm(workshopId)
+    if (!form.start_time || !form.end_time || !selectedEvent) {
+      setSessionMsgFor(m => ({ ...m, [workshopId]: { type: 'error', text: 'Start and end time required.' } })); return
     }
-    setAddingSession(true)
+    setAddingSessionFor(workshopId)
     const { error } = await supabase.from('sessions').insert({
       event_id: selectedEvent.id,
-      workshop_id: newSession.workshop_id,
-      date: newSession.date || selectedEvent.start_date,
-      start_time: newSession.start_time,
-      end_time: newSession.end_time,
-      capacity: parseInt(newSession.capacity)
+      workshop_id: workshopId,
+      date: form.date || selectedEvent.start_date,
+      start_time: form.start_time,
+      end_time: form.end_time,
+      capacity: parseInt(form.capacity) || 30
     })
     if (!error) {
-      setSessionMsg({ type: 'success', text: 'Time slot added.' })
-      setNewSession(s => ({ ...s, start_time: '', end_time: '' }))
+      setSessionMsgFor(m => ({ ...m, [workshopId]: { type: 'success', text: 'Time slot added.' } }))
+      setWorkshopSessionForms(f => ({ ...f, [workshopId]: { ...getSessionForm(workshopId), start_time: '', end_time: '' } }))
       await loadAll()
-    } else setSessionMsg({ type: 'error', text: 'Could not add time slot.' })
-    setAddingSession(false)
+    } else {
+      setSessionMsgFor(m => ({ ...m, [workshopId]: { type: 'error', text: 'Could not add time slot: ' + (error?.message || 'unknown error') } }))
+    }
+    setAddingSessionFor(null)
+  }
+
+  async function addMoment() {
+    if (!newMoment.name || !selectedEvent) { setMomentMsg({ type: 'error', text: 'Name required.' }); return }
+    setAddingMoment(true)
+    const { error } = await supabase.from('open_moments').insert({
+      event_id: selectedEvent.id,
+      name: newMoment.name,
+      description: newMoment.description || null,
+      location: newMoment.location || null,
+      date: newMoment.date || null,
+      start_time: newMoment.start_time || null,
+      end_time: newMoment.end_time || null,
+      moment_type: newMoment.moment_type
+    })
+    if (!error) {
+      setMomentMsg({ type: 'success', text: 'Moment added.' })
+      setNewMoment({ name: '', description: '', location: '', date: '', start_time: '', end_time: '', moment_type: 'optional' })
+      await loadAll()
+    } else setMomentMsg({ type: 'error', text: 'Could not add moment.' })
+    setAddingMoment(false)
+  }
+
+  async function deleteMoment(id) {
+    await supabase.from('open_moments').delete().eq('id', id)
+    setDeleteConfirm(d => { const n = { ...d }; delete n['moment_' + id]; return n })
+    await loadAll()
   }
 
   async function saveCapacity(sessionId, cap) {
@@ -345,6 +402,32 @@ const filteredGuests = guests.filter(g => {
     await supabase.from('sessions').delete().eq('id', id)
     setDeleteConfirm(d => { const n = { ...d }; delete n['session_' + id]; return n })
     await loadAll()
+  }
+
+  async function updateCheckinStatus(guestId, status) {
+    if (!selectedEvent) return
+    const { error } = await supabase
+      .from('guest_events')
+      .update({ checkin_status: status })
+      .eq('guest_id', guestId)
+      .eq('event_id', selectedEvent.id)
+    if (!error) {
+      setGuestEvents(ge => ge.map(e =>
+        e.guest_id === guestId && e.event_id === selectedEvent.id
+          ? { ...e, checkin_status: status }
+          : e
+      ))
+    }
+  }
+
+  async function updateWaiverSigned(guestId, signed) {
+    const { error } = await supabase
+      .from('guests')
+      .update({ waiver_signed: signed })
+      .eq('id', guestId)
+    if (!error) {
+      setGuests(gs => gs.map(g => g.id === guestId ? { ...g, waiver_signed: signed } : g))
+    }
   }
 
   // ── SUPER ADMIN ───────────────────────────────────────────
@@ -519,7 +602,7 @@ const filteredGuests = guests.filter(g => {
   }
 
   // ── MAIN ADMIN ────────────────────────────────────────────
-  const adminTabs = ['dashboard', 'guests', 'workshops', 'time slots']
+  const adminTabs = ['dashboard', 'check-in', 'guests', 'workshops', 'open moments']
   const superTabs = [...adminTabs, 'ticket types', 'events', 'instructors', 'shopify', 'settings']
   const tabs = role === 'super' ? superTabs : adminTabs
 
@@ -536,17 +619,21 @@ const filteredGuests = guests.filter(g => {
           {/* Event switcher */}
           {events.length > 0 && (
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              {events.map(ev => (
-                <button key={ev.id} onClick={() => { setSelectedEvent(ev); setNewSession(s => ({ ...s, date: ev.start_date })) }} style={{
-                  padding: '4px 12px', borderRadius: 20, border: '0.5px solid',
-                  borderColor: selectedEvent?.id === ev.id ? '#1a1a1a' : '#d0d0d0',
-                  background: selectedEvent?.id === ev.id ? '#1a1a1a' : '#fff',
-                  color: selectedEvent?.id === ev.id ? '#fff' : '#666',
-                  fontSize: 12, cursor: 'pointer'
-                }}>
-                  {ev.name} <span style={{ opacity: 0.6, fontSize: 10 }}>{ev.status}</span>
-                </button>
-              ))}
+              {events.map(ev => {
+                const past = isPastEvent(ev)
+                const isSelected = selectedEvent?.id === ev.id
+                return (
+                  <button key={ev.id} onClick={() => setSelectedEvent(ev)} style={{
+                    padding: '4px 12px', borderRadius: 20, border: '0.5px solid',
+                    borderColor: isSelected ? '#1a1a1a' : '#d0d0d0',
+                    background: isSelected ? '#1a1a1a' : past ? '#f5f5f5' : '#fff',
+                    color: isSelected ? '#fff' : past ? '#aaa' : '#666',
+                    fontSize: 12, cursor: 'pointer'
+                  }}>
+                    {ev.name} <span style={{ opacity: 0.6, fontSize: 10 }}>{past ? 'Past' : ev.status}</span>
+                  </button>
+                )
+              })}
             </div>
           )}
         </div>
@@ -749,7 +836,7 @@ const filteredGuests = guests.filter(g => {
                       <div style={{ marginTop: 12, padding: 12, background: '#f9f9f9', borderRadius: 8 }}>
                         <div style={{ fontSize: 13, marginBottom: 10 }}>Set available credits for {guest.name} at {selectedEvent?.name}</div>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                          <button onClick={() => setNewCreditsAvail(c => Math.max(0, c - 1))} style={{ width: 32, height: 32, borderRadius: 6, border: '0.5px solid #d0d0d0', background: '#fff', cursor: 'pointer', fontSize: 18 }}>−</button>
+                          <button onClick={() => setNewCreditsAvail(c => Math.max(used, c - 1))} style={{ width: 32, height: 32, borderRadius: 6, border: '0.5px solid #d0d0d0', background: '#fff', cursor: 'pointer', fontSize: 18 }}>−</button>
                           <span style={{ fontSize: 18, fontWeight: 500, minWidth: 32, textAlign: 'center' }}>{newCreditsAvail}</span>
                           <button onClick={() => setNewCreditsAvail(c => c + 1)} style={{ width: 32, height: 32, borderRadius: 6, border: '0.5px solid #d0d0d0', background: '#fff', cursor: 'pointer', fontSize: 18 }}>+</button>
                           <span style={{ fontSize: 12, color: '#888' }}>credits available (default: {total})</span>
@@ -790,41 +877,169 @@ const filteredGuests = guests.filter(g => {
           </div>
           <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 10 }}>All workshops ({workshops.length})</div>
           <Msg msg={workshopMsg} />
-          {workshops.map(w => (
-            <div key={w.id} style={card}>
-              {editingWorkshop?.id === w.id ? (
-                <div>
-                  {[
-                    { label: 'Name *', key: 'name' },
-                    { label: 'Category', key: 'category' },
-                    { label: 'Instructor', key: 'instructor' },
-                    { label: 'Location', key: 'location' },
-                    { label: 'Description', key: 'description' }
-                  ].map(f => (
-                    <div key={f.key} style={fw}>
-                      <label style={lbl}>{f.label}</label>
-                      <input type="text" value={editWorkshopData[f.key] || ''} onChange={e => setEditWorkshopData(d => ({ ...d, [f.key]: e.target.value }))} style={inp} />
-                    </div>
-                  ))}
-                  <div style={{ display: 'flex', gap: 8 }}>
-                    <button onClick={updateWorkshop} disabled={savingWorkshop} style={btn('#1a1a1a', '#fff')}>{savingWorkshop ? 'Saving...' : 'Save'}</button>
-                    <button onClick={() => setEditingWorkshop(null)} style={btn('#fff')}>Cancel</button>
-                  </div>
-                </div>
-              ) : (
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+          {workshops.map(w => {
+            const wSessions = filteredSessions.filter(s => s.workshop_id === w.id)
+            const form = getSessionForm(w.id)
+            const isExpanded = expandedWorkshops[w.id]
+            return (
+              <div key={w.id} style={card}>
+                {editingWorkshop?.id === w.id ? (
                   <div>
-                    <div style={{ fontSize: 14, fontWeight: 500 }}>{w.name}</div>
-                    <div style={{ fontSize: 12, color: '#888' }}>
-                      {w.category}{w.instructor ? ' · ' + w.instructor : ''}
-                      {w.location ? ' · 📍 ' + w.location : ''}
+                    {[
+                      { label: 'Name *', key: 'name' },
+                      { label: 'Category', key: 'category' },
+                      { label: 'Instructor', key: 'instructor' },
+                      { label: 'Location', key: 'location' },
+                      { label: 'Description', key: 'description' }
+                    ].map(f => (
+                      <div key={f.key} style={fw}>
+                        <label style={lbl}>{f.label}</label>
+                        <input type="text" value={editWorkshopData[f.key] || ''} onChange={e => setEditWorkshopData(d => ({ ...d, [f.key]: e.target.value }))} style={inp} />
+                      </div>
+                    ))}
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button onClick={updateWorkshop} disabled={savingWorkshop} style={btn('#1a1a1a', '#fff')}>{savingWorkshop ? 'Saving...' : 'Save'}</button>
+                      <button onClick={() => setEditingWorkshop(null)} style={btn('#fff')}>Cancel</button>
                     </div>
-                    {w.description && <div style={{ fontSize: 12, color: '#aaa' }}>{w.description}</div>}
                   </div>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <span style={{ fontSize: 12, color: '#888' }}>{filteredSessions.filter(s => s.workshop_id === w.id).length} slots this event</span>
-                    <button onClick={() => { setEditingWorkshop(w); setEditWorkshopData({ name: w.name, category: w.category || '', instructor: w.instructor || '', location: w.location || '', description: w.description || '' }); setWorkshopMsg(null) }} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px' }}>Edit</button>
-                  </div>
+                ) : (
+                  <>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 500 }}>{w.name}</div>
+                        <div style={{ fontSize: 12, color: '#888' }}>
+                          {w.category}{w.instructor ? ' · ' + w.instructor : ''}
+                          {w.location ? ' · 📍 ' + w.location : ''}
+                        </div>
+                        {w.description && <div style={{ fontSize: 12, color: '#aaa' }}>{w.description}</div>}
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <button onClick={() => setExpandedWorkshops(x => ({ ...x, [w.id]: !x[w.id] }))} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px' }}>
+                          {wSessions.length} slot{wSessions.length !== 1 ? 's' : ''} {isExpanded ? '▲' : '▼'}
+                        </button>
+                        <button onClick={() => { setEditingWorkshop(w); setEditWorkshopData({ name: w.name, category: w.category || '', instructor: w.instructor || '', location: w.location || '', description: w.description || '' }); setWorkshopMsg(null) }} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px' }}>Edit</button>
+                      </div>
+                    </div>
+                    {isExpanded && (
+                      <div style={{ marginTop: 12, borderTop: '0.5px solid #ebebeb', paddingTop: 12 }}>
+                        {wSessions.map(s => {
+                          const enrolled = getEnrolled(s.id)
+                          const isEditingCap = editingCapacity[s.id] !== undefined
+                          const isConfirmDelete = deleteConfirm['session_' + s.id]
+                          return (
+                            <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 10px', background: '#f9f9f9', borderRadius: 7, marginBottom: 5, flexWrap: 'wrap', gap: 8 }}>
+                              <span style={{ fontSize: 13 }}>{s.date} · {formatTime(s.start_time)} – {formatTime(s.end_time)}</span>
+                              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                                {isEditingCap ? (
+                                  <>
+                                    <input type="number" value={editingCapacity[s.id]} onChange={e => setEditingCapacity(c => ({ ...c, [s.id]: e.target.value }))}
+                                      style={{ width: 60, fontSize: 13, padding: '3px 6px', borderRadius: 5, border: '0.5px solid #d0d0d0' }} />
+                                    <button onClick={() => saveCapacity(s.id, editingCapacity[s.id])} style={{ ...btn('#1a1a1a', '#fff'), fontSize: 11, padding: '3px 10px' }}>Save</button>
+                                    <button onClick={() => setEditingCapacity(c => { const n = { ...c }; delete n[s.id]; return n })} style={{ ...btn('#fff'), fontSize: 11, padding: '3px 8px' }}>✕</button>
+                                  </>
+                                ) : (
+                                  <button onClick={() => setEditingCapacity(c => ({ ...c, [s.id]: s.capacity }))} style={{ fontSize: 12, color: '#888', background: 'none', border: 'none', cursor: 'pointer' }}>
+                                    {enrolled}/{s.capacity} · edit cap
+                                  </button>
+                                )}
+                                {!isConfirmDelete ? (
+                                  <button onClick={() => setDeleteConfirm(d => ({ ...d, ['session_' + s.id]: true }))} style={{ ...btn('#fff'), fontSize: 11, padding: '3px 8px', color: '#c0392b', borderColor: '#f5c0c0' }}>Delete</button>
+                                ) : (
+                                  <div style={{ display: 'flex', gap: 4 }}>
+                                    <button onClick={() => deleteSession(s.id)} style={{ ...btn('#c0392b', '#fff'), fontSize: 11, padding: '3px 10px' }}>Confirm delete</button>
+                                    <button onClick={() => setDeleteConfirm(d => { const n = { ...d }; delete n['session_' + s.id]; return n })} style={{ ...btn('#fff'), fontSize: 11, padding: '3px 8px' }}>✕</button>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })}
+                        <Msg msg={sessionMsgFor[w.id]} />
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end', marginTop: wSessions.length > 0 ? 8 : 0 }}>
+                          <div>
+                            <label style={lbl}>Date</label>
+                            <input type="date" value={form.date} onChange={e => setWorkshopSessionForms(f => ({ ...f, [w.id]: { ...form, date: e.target.value } }))} style={{ ...inp, width: 150 }} />
+                          </div>
+                          <div>
+                            <label style={lbl}>Start</label>
+                            <input type="time" value={form.start_time} onChange={e => setWorkshopSessionForms(f => ({ ...f, [w.id]: { ...form, start_time: e.target.value } }))} style={{ ...inp, width: 130 }} />
+                          </div>
+                          <div>
+                            <label style={lbl}>End</label>
+                            <input type="time" value={form.end_time} onChange={e => setWorkshopSessionForms(f => ({ ...f, [w.id]: { ...form, end_time: e.target.value } }))} style={{ ...inp, width: 130 }} />
+                          </div>
+                          <div>
+                            <label style={lbl}>Cap</label>
+                            <input type="number" value={form.capacity} onChange={e => setWorkshopSessionForms(f => ({ ...f, [w.id]: { ...form, capacity: e.target.value } }))} style={{ ...inp, width: 70 }} />
+                          </div>
+                          <button onClick={() => addInlineSession(w.id)} disabled={addingSessionFor === w.id} style={{ ...btn('#1a1a1a', '#fff'), fontSize: 12, padding: '8px 14px' }}>
+                            {addingSessionFor === w.id ? 'Adding...' : '+ Add slot'}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {/* ── OPEN MOMENTS ── */}
+      {activeTab === 'open moments' && (
+        <div>
+          <div style={{ maxWidth: 520, marginBottom: 28 }}>
+            <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 14 }}>
+              Add moment {selectedEvent && <span style={{ fontWeight: 400, color: '#888' }}>· {selectedEvent.name}</span>}
+            </div>
+            <Msg msg={momentMsg} />
+            <div style={fw}>
+              <label style={lbl}>Name *</label>
+              <input type="text" value={newMoment.name} onChange={e => setNewMoment(m => ({ ...m, name: e.target.value }))} placeholder="Campfire Gathering" style={inp} />
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+              {['mandatory', 'optional'].map(t => (
+                <button key={t} onClick={() => setNewMoment(m => ({ ...m, moment_type: t }))} style={{ flex: 1, padding: '8px', borderRadius: 8, border: '0.5px solid', borderColor: newMoment.moment_type === t ? '#1a1a1a' : '#d0d0d0', background: newMoment.moment_type === t ? '#1a1a1a' : '#fff', color: newMoment.moment_type === t ? '#fff' : '#666', fontSize: 12, cursor: 'pointer', textTransform: 'capitalize' }}>
+                  {t}
+                </button>
+              ))}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
+              <div><label style={lbl}>Date</label><input type="date" value={newMoment.date} onChange={e => setNewMoment(m => ({ ...m, date: e.target.value }))} style={inp} /></div>
+              <div><label style={lbl}>Start time</label><input type="time" value={newMoment.start_time} onChange={e => setNewMoment(m => ({ ...m, start_time: e.target.value }))} style={inp} /></div>
+              <div><label style={lbl}>End time</label><input type="time" value={newMoment.end_time} onChange={e => setNewMoment(m => ({ ...m, end_time: e.target.value }))} style={inp} /></div>
+            </div>
+            <div style={fw}><label style={lbl}>Location</label><input type="text" value={newMoment.location} onChange={e => setNewMoment(m => ({ ...m, location: e.target.value }))} placeholder="Main Field" style={inp} /></div>
+            <div style={fw}><label style={lbl}>Description</label><input type="text" value={newMoment.description} onChange={e => setNewMoment(m => ({ ...m, description: e.target.value }))} placeholder="Optional" style={inp} /></div>
+            <button onClick={addMoment} disabled={addingMoment} style={{ ...btn('#1a1a1a', '#fff'), width: '100%', padding: '10px' }}>
+              {addingMoment ? 'Adding...' : 'Add moment'}
+            </button>
+          </div>
+          <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 10 }}>
+            Moments {selectedEvent && <span style={{ fontWeight: 400, color: '#888' }}>· {selectedEvent.name}</span>}
+          </div>
+          {filteredMoments.length === 0 && (
+            <div style={{ fontSize: 13, color: '#aaa', padding: 14, background: '#f9f9f9', borderRadius: 8 }}>No moments yet for this event.</div>
+          )}
+          {filteredMoments.map(m => (
+            <div key={m.id} style={{ ...card, display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, flexWrap: 'wrap' }}>
+              <div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 3 }}>
+                  <div style={{ fontSize: 14, fontWeight: 500 }}>{m.name}</div>
+                  <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 20, background: m.moment_type === 'mandatory' ? '#1a1a1a' : '#f0f0f0', color: m.moment_type === 'mandatory' ? '#fff' : '#666' }}>{m.moment_type}</span>
+                </div>
+                <div style={{ fontSize: 12, color: '#888' }}>
+                  {m.date && m.date + ' · '}{m.start_time && formatTime(m.start_time)}{m.end_time && ' – ' + formatTime(m.end_time)}{m.location && ' · 📍 ' + m.location}
+                </div>
+                {m.description && <div style={{ fontSize: 12, color: '#aaa', marginTop: 2 }}>{m.description}</div>}
+              </div>
+              {!deleteConfirm['moment_' + m.id] ? (
+                <button onClick={() => setDeleteConfirm(d => ({ ...d, ['moment_' + m.id]: true }))} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px', color: '#c0392b', borderColor: '#f5c0c0', flexShrink: 0 }}>Delete</button>
+              ) : (
+                <div style={{ display: 'flex', gap: 4 }}>
+                  <button onClick={() => deleteMoment(m.id)} style={{ ...btn('#c0392b', '#fff'), fontSize: 11, padding: '4px 10px' }}>Confirm</button>
+                  <button onClick={() => setDeleteConfirm(d => { const n = { ...d }; delete n['moment_' + m.id]; return n })} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 8px' }}>✕</button>
                 </div>
               )}
             </div>
@@ -832,86 +1047,110 @@ const filteredGuests = guests.filter(g => {
         </div>
       )}
 
-      {/* ── TIME SLOTS ── */}
-      {activeTab === 'time slots' && (
+      {/* ── CHECK-IN ── */}
+      {activeTab === 'check-in' && (
         <div>
-          <div style={{ maxWidth: 480, marginBottom: 28 }}>
-            <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 14 }}>
-              Add time slot {selectedEvent && <span style={{ fontWeight: 400, color: '#888' }}>· {selectedEvent.name}</span>}
-            </div>
-            <Msg msg={sessionMsg} />
-            <div style={fw}>
-              <label style={lbl}>Workshop *</label>
-              <select value={newSession.workshop_id} onChange={e => setNewSession(s => ({ ...s, workshop_id: e.target.value }))} style={inp}>
-                <option value="">Select workshop...</option>
-                {workshops.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
-              </select>
-            </div>
-            <div style={fw}>
-              <label style={lbl}>Date *</label>
-              <input type="date" value={newSession.date} onChange={e => setNewSession(s => ({ ...s, date: e.target.value }))} style={inp} />
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
-              <div>
-                <label style={lbl}>Start time *</label>
-                <input type="time" value={newSession.start_time} onChange={e => setNewSession(s => ({ ...s, start_time: e.target.value }))} style={inp} />
-              </div>
-              <div>
-                <label style={lbl}>End time *</label>
-                <input type="time" value={newSession.end_time} onChange={e => setNewSession(s => ({ ...s, end_time: e.target.value }))} style={inp} />
-              </div>
-            </div>
-            <div style={fw}>
-              <label style={lbl}>Capacity</label>
-              <input type="number" value={newSession.capacity} onChange={e => setNewSession(s => ({ ...s, capacity: e.target.value }))} style={inp} />
-            </div>
-            <button onClick={addSession} disabled={addingSession} style={{ ...btn('#1a1a1a', '#fff'), width: '100%', padding: '10px' }}>
-              {addingSession ? 'Adding...' : 'Add time slot'}
-            </button>
-          </div>
+          {!selectedEvent ? (
+            <div style={{ fontSize: 13, color: '#aaa', padding: 14, background: '#f9f9f9', borderRadius: 8 }}>Select an event to view check-in.</div>
+          ) : (() => {
+            const eventGEs = guestEvents.filter(ge => ge.event_id === selectedEvent.id)
+            const allCheckinGuests = eventGEs.map(ge => ({
+              ge,
+              guest: guests.find(g => g.id === ge.guest_id)
+            })).filter(x => x.guest)
 
-          <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 10 }}>
-            Time slots {selectedEvent && <span style={{ fontWeight: 400, color: '#888' }}>· {selectedEvent.name}</span>}
-          </div>
-          {sessionsByWorkshop.map(w => (
-            <div key={w.id} style={card}>
-              <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 2 }}>{w.name}</div>
-              {w.location && <div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>📍 {w.location}</div>}
-              {!w.location && <div style={{ marginBottom: 8 }} />}
-              {w.sessions.map(s => {
-                const enrolled = getEnrolled(s.id)
-                const isEditingCap = editingCapacity[s.id] !== undefined
-                const isConfirmDelete = deleteConfirm['session_' + s.id]
-                return (
-                  <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '7px 10px', background: '#f9f9f9', borderRadius: 7, marginBottom: 5, flexWrap: 'wrap', gap: 8 }}>
-                    <span style={{ fontSize: 13 }}>{formatTime(s.start_time)} – {formatTime(s.end_time)}</span>
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                      {isEditingCap ? (
-                        <>
-                          <input type="number" value={editingCapacity[s.id]} onChange={e => setEditingCapacity(c => ({ ...c, [s.id]: e.target.value }))}
-                            style={{ width: 60, fontSize: 13, padding: '3px 6px', borderRadius: 5, border: '0.5px solid #d0d0d0' }} />
-                          <button onClick={() => saveCapacity(s.id, editingCapacity[s.id])} style={{ ...btn('#1a1a1a', '#fff'), fontSize: 11, padding: '3px 10px' }}>Save</button>
-                          <button onClick={() => setEditingCapacity(c => { const n = { ...c }; delete n[s.id]; return n })} style={{ ...btn('#fff'), fontSize: 11, padding: '3px 8px' }}>✕</button>
-                        </>
-                      ) : (
-                        <button onClick={() => setEditingCapacity(c => ({ ...c, [s.id]: s.capacity }))} style={{ fontSize: 12, color: '#888', background: 'none', border: 'none', cursor: 'pointer' }}>
-                          {enrolled}/{s.capacity} · edit cap
-                        </button>
-                      )}
-                      {!isConfirmDelete ? (
-                        <button onClick={() => setDeleteConfirm(d => ({ ...d, ['session_' + s.id]: true }))} style={{ ...btn('#fff'), fontSize: 11, padding: '3px 8px', color: '#c0392b', borderColor: '#f5c0c0' }}>Delete</button>
-                      ) : (
-                        <div style={{ display: 'flex', gap: 4 }}>
-                          <button onClick={() => deleteSession(s.id)} style={{ ...btn('#c0392b', '#fff'), fontSize: 11, padding: '3px 10px' }}>Confirm delete</button>
-                          <button onClick={() => setDeleteConfirm(d => { const n = { ...d }; delete n['session_' + s.id]; return n })} style={{ ...btn('#fff'), fontSize: 11, padding: '3px 8px' }}>✕</button>
-                        </div>
-                      )}
+            const search = checkinSearch.toLowerCase()
+            const filtered = allCheckinGuests.filter(x =>
+              !search ||
+              x.guest.name.toLowerCase().includes(search) ||
+              x.guest.email.toLowerCase().includes(search)
+            )
+
+            const sortOrder = { checked_in: 0, not_arrived: 1, departed: 2 }
+            filtered.sort((a, b) => {
+              const aS = a.ge.checkin_status || 'not_arrived'
+              const bS = b.ge.checkin_status || 'not_arrived'
+              const aO = sortOrder[aS] ?? 1
+              const bO = sortOrder[bS] ?? 1
+              if (aO !== bO) return aO - bO
+              return a.guest.name.localeCompare(b.guest.name)
+            })
+
+            const total = eventGEs.length
+            const checkedIn = eventGEs.filter(ge => ge.checkin_status === 'checked_in').length
+            const departed = eventGEs.filter(ge => ge.checkin_status === 'departed').length
+            const notArrived = eventGEs.filter(ge => !ge.checkin_status || ge.checkin_status === 'not_arrived').length
+
+            const statusLabels = { not_arrived: 'Not Arrived', checked_in: 'Checked In', departed: 'Departed' }
+            const activeColors = {
+              not_arrived: { bg: '#e0e0e0', color: '#444', border: '#c0c0c0' },
+              checked_in: { bg: '#1a7a4a', color: '#fff', border: '#1a7a4a' },
+              departed: { bg: '#2060b0', color: '#fff', border: '#2060b0' }
+            }
+
+            return (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 10, marginBottom: 18 }}>
+                  {[
+                    { label: 'Total', value: total, color: '#1a1a1a' },
+                    { label: 'Checked In', value: checkedIn, color: '#1a7a4a' },
+                    { label: 'Departed', value: departed, color: '#2060b0' },
+                    { label: 'Not Arrived', value: notArrived, color: '#888' }
+                  ].map(s => (
+                    <div key={s.label} style={{ background: '#f5f5f5', borderRadius: 8, padding: '12px 16px' }}>
+                      <div style={{ fontSize: 22, fontWeight: 500, color: s.color }}>{s.value}</div>
+                      <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>{s.label}</div>
                     </div>
-                  </div>
-                )
-              })}
-            </div>
-          ))}
+                  ))}
+                </div>
+
+                <input type="text" placeholder="Search by name or email..." value={checkinSearch}
+                  onChange={e => setCheckinSearch(e.target.value)}
+                  style={{ ...inp, marginBottom: 14 }} />
+
+                {filtered.length === 0 ? (
+                  <div style={{ fontSize: 13, color: '#aaa', padding: 14, background: '#f9f9f9', borderRadius: 8 }}>No guests found.</div>
+                ) : filtered.map(({ ge, guest }) => {
+                  const status = ge.checkin_status || 'not_arrived'
+                  return (
+                    <div key={guest.id} style={{ ...card, marginBottom: 8 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                        <div style={{ flex: 1, minWidth: 140 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+                            <div style={{ fontSize: 14, fontWeight: 500 }}>{guest.name}</div>
+                            {status === 'checked_in' && guest.waiver_signed && (
+                              <span style={{ fontSize: 11, color: '#1a7a4a', background: '#e8f5ee', padding: '2px 8px', borderRadius: 10 }}>✓ waiver</span>
+                            )}
+                          </div>
+                          <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>
+                            {guest.ticket_types?.display_name || guest.ticket_types?.name}
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', alignItems: 'center' }}>
+                          {['not_arrived', 'checked_in', 'departed'].map(s => {
+                            const isActive = status === s
+                            const c = isActive ? activeColors[s] : { bg: '#fff', color: '#bbb', border: '#e8e8e8' }
+                            return (
+                              <button key={s} onClick={() => updateCheckinStatus(guest.id, s)}
+                                style={{ fontSize: 11, padding: '5px 11px', borderRadius: 6, border: '0.5px solid ' + c.border, background: c.bg, color: c.color, cursor: 'pointer', fontWeight: isActive ? 500 : 400 }}>
+                                {statusLabels[s]}
+                              </button>
+                            )
+                          })}
+                          <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#888', cursor: 'pointer', marginLeft: 6 }}>
+                            <input type="checkbox" checked={!!guest.waiver_signed}
+                              onChange={e => updateWaiverSigned(guest.id, e.target.checked)}
+                              style={{ cursor: 'pointer' }} />
+                            Waiver
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </>
+            )
+          })()}
         </div>
       )}
 
@@ -993,11 +1232,16 @@ const filteredGuests = guests.filter(g => {
             </button>
           </div>
           <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 10 }}>Events</div>
-          {events.map(ev => (
+          {events.map(ev => {
+            const evPast = isPastEvent(ev)
+            return (
             <div key={ev.id} style={card}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
                 <div>
-                  <div style={{ fontSize: 15, fontWeight: 500 }}>{ev.name}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
+                    <div style={{ fontSize: 15, fontWeight: 500 }}>{ev.name}</div>
+                    {evPast && <span style={{ fontSize: 11, fontWeight: 500, color: '#888', background: '#f0f0f0', padding: '2px 8px', borderRadius: 10 }}>Past</span>}
+                  </div>
                   <div style={{ fontSize: 12, color: '#888' }}>{ev.location} · {ev.start_date} to {ev.end_date}</div>
                   <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
                     {['upcoming', 'active', 'past'].map(s => (
@@ -1020,7 +1264,7 @@ const filteredGuests = guests.filter(g => {
                 )}
               </div>
             </div>
-          ))}
+          )})}
         </div>
       )}
 
@@ -1114,7 +1358,7 @@ const filteredGuests = guests.filter(g => {
           <button onClick={savePins} style={{ ...btn('#1a1a1a', '#fff'), padding: '10px 24px' }}>Save PINs</button>
           <div style={{ marginTop: 24, padding: 14, background: '#f9f9f9', borderRadius: 8, fontSize: 12, color: '#666', lineHeight: 1.8 }}>
             <strong>Super admin</strong> — ticket types, events, Shopify, instructors, PINs, everything<br />
-            <strong>Admin</strong> — guests, workshops, time slots, dashboard<br />
+            <strong>Admin</strong> — guests, workshops (with time slots), dashboard<br />
             <strong>Instructor</strong> — read-only roster for their workshop
           </div>
         </div>
