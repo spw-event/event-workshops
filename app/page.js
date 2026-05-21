@@ -106,11 +106,21 @@ export default function Home() {
     setPartyCreditsTotal(creditsTotal || 0)
 
     // Sessions for this event
-    const { data: sessionData } = await supabase
+    let { data: sessionData } = await supabase
       .from('sessions')
       .select('*, workshops(*)')
       .eq('event_id', event.id)
       .order('start_time', { ascending: true })
+
+    // Fallback for legacy sessions that pre-date the event_id column
+    if (!sessionData || sessionData.length === 0) {
+      const { data: legacySessions } = await supabase
+        .from('sessions')
+        .select('*, workshops(*)')
+        .is('event_id', null)
+        .order('start_time', { ascending: true })
+      if (legacySessions && legacySessions.length > 0) sessionData = legacySessions
+    }
     setSessions(sessionData || [])
 
     // Unique workshops from sessions

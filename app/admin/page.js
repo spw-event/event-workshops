@@ -38,6 +38,9 @@ export default function AdminPage() {
   const [newWorkshop, setNewWorkshop] = useState({ name: '', category: '', instructor: '', description: '', location: '' })
   const [workshopMsg, setWorkshopMsg] = useState(null)
   const [addingWorkshop, setAddingWorkshop] = useState(false)
+  const [editingWorkshop, setEditingWorkshop] = useState(null)
+  const [editWorkshopData, setEditWorkshopData] = useState({})
+  const [savingWorkshop, setSavingWorkshop] = useState(false)
 
   const [newSession, setNewSession] = useState({ workshop_id: '', date: '', start_time: '', end_time: '', capacity: 30 })
   const [sessionMsg, setSessionMsg] = useState(null)
@@ -184,12 +187,6 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
   }
 
   // Event-filtered data
-  const eventSessions = selectedEvent ? sessions.filter(s => {
-    const session = sessions.find(x => x.id === s.id)
-    return session && registrations.some(r => r.session_id === s.id) ||
-      sessions.filter(x => x.event_id === selectedEvent.id).some(x => x.id === s.id)
-  }) : sessions
-
   const filteredSessions = selectedEvent
     ? sessions.filter(s => s.event_id === selectedEvent.id)
     : sessions
@@ -249,14 +246,13 @@ const filteredGuests = guests.filter(g => {
     await loadAll()
   }
 
- async function saveCredits(guest) {
+  async function saveCredits(guest) {
     if (!selectedEvent) return
     const { error } = await supabase
       .from('guest_events')
-      .update({ credits_total: newCreditsAvail, credits_used: 0 })
+      .update({ credits_total: newCreditsAvail })
       .eq('guest_id', guest.id)
       .eq('event_id', selectedEvent.id)
-    console.log('saveCredits', { newCreditsAvail, error })
     setAdjustingGuest(null)
     await loadAll()
   }
@@ -294,6 +290,25 @@ const filteredGuests = guests.filter(g => {
       await loadAll()
     } else setWorkshopMsg({ type: 'error', text: 'Could not add workshop.' })
     setAddingWorkshop(false)
+  }
+
+  async function updateWorkshop() {
+    if (!editingWorkshop) return
+    setSavingWorkshop(true)
+    const { error } = await supabase.from('workshops').update({
+      name: editWorkshopData.name,
+      category: editWorkshopData.category,
+      instructor: editWorkshopData.instructor,
+      location: editWorkshopData.location,
+      description: editWorkshopData.description
+    }).eq('id', editingWorkshop.id)
+    if (!error) {
+      setEditingWorkshop(null)
+      await loadAll()
+    } else {
+      setWorkshopMsg({ type: 'error', text: 'Could not update workshop.' })
+    }
+    setSavingWorkshop(false)
   }
 
   async function addSession() {
@@ -713,7 +728,7 @@ const filteredGuests = guests.filter(g => {
                         <button onClick={() => { const base = window.location.origin.replace('/admin', ''); navigator.clipboard.writeText(base + '?token=' + guest.token + (selectedEvent ? '&event=' + selectedEvent.id : '')) }} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px' }}>
                           Copy link
                         </button>
-                        <button onClick={() => { setAdjustingGuest(guest); setNewCreditsAvail(remaining) }} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px' }}>
+                        <button onClick={() => { setAdjustingGuest(guest); setNewCreditsAvail(total) }} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px' }}>
                           Credits
                         </button>
                         {!isDeleting ? (
@@ -774,17 +789,44 @@ const filteredGuests = guests.filter(g => {
             </button>
           </div>
           <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 10 }}>All workshops ({workshops.length})</div>
+          <Msg msg={workshopMsg} />
           {workshops.map(w => (
-            <div key={w.id} style={{ ...card, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-              <div>
-                <div style={{ fontSize: 14, fontWeight: 500 }}>{w.name}</div>
-                <div style={{ fontSize: 12, color: '#888' }}>
-                  {w.category}{w.instructor ? ' · ' + w.instructor : ''}
-                  {w.location ? ' · 📍 ' + w.location : ''}
+            <div key={w.id} style={card}>
+              {editingWorkshop?.id === w.id ? (
+                <div>
+                  {[
+                    { label: 'Name *', key: 'name' },
+                    { label: 'Category', key: 'category' },
+                    { label: 'Instructor', key: 'instructor' },
+                    { label: 'Location', key: 'location' },
+                    { label: 'Description', key: 'description' }
+                  ].map(f => (
+                    <div key={f.key} style={fw}>
+                      <label style={lbl}>{f.label}</label>
+                      <input type="text" value={editWorkshopData[f.key] || ''} onChange={e => setEditWorkshopData(d => ({ ...d, [f.key]: e.target.value }))} style={inp} />
+                    </div>
+                  ))}
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={updateWorkshop} disabled={savingWorkshop} style={btn('#1a1a1a', '#fff')}>{savingWorkshop ? 'Saving...' : 'Save'}</button>
+                    <button onClick={() => setEditingWorkshop(null)} style={btn('#fff')}>Cancel</button>
+                  </div>
                 </div>
-                {w.description && <div style={{ fontSize: 12, color: '#aaa' }}>{w.description}</div>}
-              </div>
-              <div style={{ fontSize: 12, color: '#888' }}>{filteredSessions.filter(s => s.workshop_id === w.id).length} slots this event</div>
+              ) : (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 500 }}>{w.name}</div>
+                    <div style={{ fontSize: 12, color: '#888' }}>
+                      {w.category}{w.instructor ? ' · ' + w.instructor : ''}
+                      {w.location ? ' · 📍 ' + w.location : ''}
+                    </div>
+                    {w.description && <div style={{ fontSize: 12, color: '#aaa' }}>{w.description}</div>}
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <span style={{ fontSize: 12, color: '#888' }}>{filteredSessions.filter(s => s.workshop_id === w.id).length} slots this event</span>
+                    <button onClick={() => { setEditingWorkshop(w); setEditWorkshopData({ name: w.name, category: w.category || '', instructor: w.instructor || '', location: w.location || '', description: w.description || '' }); setWorkshopMsg(null) }} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px' }}>Edit</button>
+                  </div>
+                </div>
+              )}
             </div>
           ))}
         </div>
