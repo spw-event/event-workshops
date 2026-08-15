@@ -44,28 +44,6 @@ body {
   -webkit-overflow-scrolling: touch;
 }
 
-/* Guest page top tab bar — desktop only; bottom nav takes over on mobile */
-.spw-top-tabs {
-  display: block;
-}
-.spw-bottom-nav {
-  display: none;
-}
-.spw-main-content {
-  padding-bottom: 0;
-}
-@media (max-width: 768px) {
-  .spw-top-tabs {
-    display: none;
-  }
-  .spw-bottom-nav {
-    display: flex;
-  }
-  .spw-main-content {
-    padding-bottom: calc(56px + env(safe-area-inset-bottom));
-  }
-}
-
 /* Resource category accordion headers (admin Staff Resources + staff dashboard) */
 .resource-cat-header {
   background: #fff;

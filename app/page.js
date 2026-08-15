@@ -171,31 +171,26 @@ function EventInfoAccordion({ event, sections, partners }) {
           No information available for this event yet.
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div>
           {ordered.map(s => {
             const open = openIndex === s.id
             return (
-              <div key={s.id} style={{
-                background: '#fff',
-                borderTop: '0.5px solid #E8E4DE', borderRight: '0.5px solid #E8E4DE',
-                borderBottom: '0.5px solid #E8E4DE', borderLeft: '0.5px solid #E8E4DE',
-                borderRadius: 6, overflow: 'hidden'
-              }}>
+              <div key={s.id}>
                 <button
                   onClick={() => setOpenIndex(open ? null : s.id)}
                   style={{
                     width: '100%', display: 'flex', alignItems: 'center', gap: 10,
-                    padding: '16px 18px', background: open ? '#FAFAF8' : '#fff',
-                    border: 'none', cursor: 'pointer', textAlign: 'left', font: 'inherit'
+                    padding: '14px 0', background: 'none',
+                    border: 'none', borderBottom: '0.5px solid #E8E4DE',
+                    cursor: 'pointer', textAlign: 'left', font: 'inherit'
                   }}
                 >
-                  <span style={{ fontSize: 17 }}>{s.icon || '📄'}</span>
-                  <span style={{ flex: 1, fontSize: 14, fontWeight: 600, color: '#1a1a1a', letterSpacing: '0.01em' }}>{s.title}</span>
+                  <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: '#1a1a1a', letterSpacing: '0.08em', textTransform: 'uppercase' }}>{s.title}</span>
                   <span style={{ fontSize: 13, color: '#8C8C8C', flexShrink: 0 }}>{open ? '▾' : '▸'}</span>
                 </button>
                 <div style={{ display: 'grid', gridTemplateRows: open ? '1fr' : '0fr', transition: 'grid-template-rows 0.25s ease' }}>
                   <div style={{ overflow: 'hidden' }}>
-                    <div style={{ padding: '2px 18px 18px', fontSize: 14, lineHeight: 1.7, color: '#1a1a1a' }}>
+                    <div style={{ padding: '14px 0 18px', fontSize: 14, lineHeight: 1.7, color: '#1a1a1a' }}>
                       {renderInfoContent(s.content)}
                     </div>
                   </div>
@@ -207,26 +202,22 @@ function EventInfoAccordion({ event, sections, partners }) {
       )}
 
       {orderedPartners.length > 0 && (
-        <div style={{
-          background: '#fff', marginTop: 8,
-          borderTop: '0.5px solid #E8E4DE', borderRight: '0.5px solid #E8E4DE',
-          borderBottom: '0.5px solid #E8E4DE', borderLeft: '0.5px solid #E8E4DE',
-          borderRadius: 6, overflow: 'hidden'
-        }}>
+        <div style={{ marginTop: ordered.length > 0 ? 8 : 0 }}>
           <button
             onClick={() => setPartnersOpen(o => !o)}
             style={{
               width: '100%', display: 'flex', alignItems: 'center', gap: 10,
-              padding: '16px 18px', background: partnersOpen ? '#FAFAF8' : '#fff',
-              border: 'none', cursor: 'pointer', textAlign: 'left', font: 'inherit'
+              padding: '14px 0', background: 'none',
+              border: 'none', borderBottom: '0.5px solid #E8E4DE',
+              cursor: 'pointer', textAlign: 'left', font: 'inherit'
             }}
           >
-            <span style={{ flex: 1, fontSize: 13, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#1a1a1a' }}>Our Partners</span>
+            <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: '#1a1a1a', letterSpacing: '0.08em', textTransform: 'uppercase' }}>Our Partners</span>
             <span style={{ fontSize: 13, color: '#8C8C8C', flexShrink: 0 }}>{partnersOpen ? '▾' : '▸'}</span>
           </button>
           <div style={{ display: 'grid', gridTemplateRows: partnersOpen ? '1fr' : '0fr', transition: 'grid-template-rows 0.25s ease' }}>
             <div style={{ overflow: 'hidden' }}>
-              <div style={{ padding: '2px 18px 18px' }}>
+              <div style={{ padding: '14px 0 18px' }}>
                 {orderedPartners.map((p, i) => (
                   <div key={p.id} style={{
                     display: 'flex', gap: 12, alignItems: 'flex-start',
@@ -310,6 +301,14 @@ export default function Home() {
   const [emailInput, setEmailInput] = useState('')
   const [emailError, setEmailError] = useState(null)
   const [emailSubmitting, setEmailSubmitting] = useState(false)
+  const [isMobile, setIsMobile] = useState(false)
+
+  useEffect(() => {
+    const check = () => setIsMobile(window.innerWidth < 768)
+    check()
+    window.addEventListener('resize', check)
+    return () => window.removeEventListener('resize', check)
+  }, [])
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
@@ -1133,17 +1132,6 @@ export default function Home() {
   // empty today — the Site tab's Partners section hides itself accordingly.
   const partnerMoments = openMoments.filter(m => m.category === 'partner')
 
-  function amenityIcon(name) {
-    const n = (name || '').toLowerCase()
-    if (/caf[eé]|coffee|\bbar\b/.test(n)) return '☕'
-    if (/kitchen|igt/.test(n)) return '🍳'
-    if (/wash|shower|bathroom/.test(n)) return '🚿'
-    if (/campstore|store|shop/.test(n)) return '🛒'
-    if (/spa|ofuro/.test(n)) return '🛁'
-    if (/service|check-?in/.test(n)) return '🙋'
-    return '📍'
-  }
-
   const agendaItems = [
     ...confirmedRegs.map(r => ({ type: 'reg', data: r, key: sortKey(r.sessions?.date, r.sessions?.start_time) })),
     ...openMoments.filter(m => m.moment_type === 'mandatory').map(m => ({ type: 'mandatory', data: m, key: sortKey(m.date, m.start_time) })),
@@ -1210,9 +1198,10 @@ export default function Home() {
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', background: '#FAFAF8', fontFamily: 'sans-serif' }}>
       <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
         <div style={{ textAlign: 'center', maxWidth: 320, width: '100%' }}>
-          <img src="/spw-logo.png" alt="Snow Peak Way" style={{ width: 120, display: 'block', margin: '0 auto 40px' }} />
-          <div style={{ fontSize: 22, fontWeight: 500, color: '#1a1a1a', marginBottom: 16 }}>Welcome</div>
-          <div style={{ fontSize: 13, color: '#8C8C8C', marginBottom: 28, lineHeight: 1.5 }}>Enter ticket holder&rsquo;s email to access the SPW event app</div>
+          <img src="/spw-logo.png" alt="Snow Peak Way" style={{ width: 120, display: 'block', margin: '0 auto 12px' }} />
+          <div style={{ fontSize: 11, letterSpacing: '0.15em', textTransform: 'uppercase', color: '#8C8C8C', marginBottom: 28 }}>Snow Peak Way</div>
+          <div className={playfair.className} style={{ fontSize: 22, fontWeight: 400, color: '#1a1a1a', marginBottom: 16 }}>Welcome</div>
+          <div style={{ fontSize: 13, color: '#8C8C8C', marginBottom: 28, lineHeight: 1.5 }}>Enter the email address used to purchase your ticket</div>
           <form onSubmit={e => { e.preventDefault(); loadDataByEmail(emailInput) }}>
             <input
               type="email"
@@ -1279,6 +1268,11 @@ export default function Home() {
           </div>
         )}
         <div style={{ fontSize: 13, color: '#8C8C8C', lineHeight: 1.6 }}>We hope to see you again soon.</div>
+        <div style={{ marginTop: 28 }}>
+          <button onClick={signOutGuest} style={{ background: 'none', border: 'none', fontSize: 11, color: '#C8C4BC', cursor: 'pointer', padding: 4 }}>
+            Not you? Sign out
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -1288,7 +1282,10 @@ export default function Home() {
       background: '#FAFAF8', minHeight: '100vh', fontFamily: 'sans-serif', color: '#1a1a1a',
       boxSizing: 'border-box', width: '100%'
     }}>
-      <div className="spw-main-content" style={{ maxWidth: 680, margin: '0 auto', padding: '24px 16px', boxSizing: 'border-box', width: '100%' }}>
+      <div style={{
+        maxWidth: 680, margin: '0 auto', padding: '24px 16px', boxSizing: 'border-box', width: '100%',
+        paddingBottom: isMobile ? 'calc(56px + env(safe-area-inset-bottom))' : 24
+      }}>
 
         {/* Header */}
         <div style={{ marginBottom: 32, textAlign: 'center' }}>
@@ -1353,38 +1350,39 @@ export default function Home() {
           </div>
         )}
 
-        {/* Tabs */}
-        <div className="tab-scroll spw-top-tabs" style={{
-          display: 'block',
-          overflowX: 'scroll',
-          overflowY: 'hidden',
-          WebkitOverflowScrolling: 'touch',
-          scrollbarWidth: 'none',
-          msOverflowStyle: 'none',
-          margin: '0 -16px',
-          padding: '0 16px',
-          borderBottom: '0.5px solid #e0e0e0',
-          marginBottom: 24
-        }}>
-          <div style={{ display: 'flex', width: 'max-content', paddingBottom: 1 }}>
-            {[['schedule', 'Schedule'], ['agenda', 'My Agenda'], ['site', 'Site'], ['guide', 'Guide'], ['packing', 'Packing List']].map(([tab, label]) => (
-              <button key={tab} onClick={() => setActiveTab(tab)} style={{
-                flex: '0 0 auto',
-                padding: '8px 14px',
-                border: 'none', background: 'none', cursor: 'pointer',
-                fontSize: 13,
-                whiteSpace: 'nowrap',
-                letterSpacing: '0.06em', textTransform: 'uppercase',
-                color: activeTab === tab ? '#1a1a1a' : '#8C8C8C',
-                borderBottom: activeTab === tab ? '2px solid #2D4A2D' : '2px solid transparent',
-                marginBottom: -1,
-                fontWeight: activeTab === tab ? 600 : 400
-              }}>
-                {label}
-              </button>
-            ))}
+        {/* Tabs — desktop only; mobile uses the bottom nav instead */}
+        {!isMobile && (
+          <div className="tab-scroll" style={{
+            overflowX: 'scroll',
+            overflowY: 'hidden',
+            WebkitOverflowScrolling: 'touch',
+            scrollbarWidth: 'none',
+            msOverflowStyle: 'none',
+            margin: '0 -16px',
+            padding: '0 16px',
+            borderBottom: '0.5px solid #e0e0e0',
+            marginBottom: 24
+          }}>
+            <div style={{ display: 'flex', width: 'max-content', paddingBottom: 1 }}>
+              {[['schedule', 'Schedule'], ['agenda', 'My Agenda'], ['site', 'Site'], ['guide', 'Guide'], ['packing', 'Packing List']].map(([tab, label]) => (
+                <button key={tab} onClick={() => setActiveTab(tab)} style={{
+                  flex: '0 0 auto',
+                  padding: '8px 14px',
+                  border: 'none', background: 'none', cursor: 'pointer',
+                  fontSize: 13,
+                  whiteSpace: 'nowrap',
+                  letterSpacing: '0.06em', textTransform: 'uppercase',
+                  color: activeTab === tab ? '#1a1a1a' : '#8C8C8C',
+                  borderBottom: activeTab === tab ? '2px solid #2D4A2D' : '2px solid transparent',
+                  marginBottom: -1,
+                  fontWeight: activeTab === tab ? 600 : 400
+                }}>
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
 
         {/* ── SCHEDULE TAB ── */}
         {activeTab === 'schedule' && (
@@ -1575,9 +1573,8 @@ export default function Home() {
                 const expandedSession = group.sessions.find(s => s.id === expandedSessionId)
                 return (
                   <div key={group.workshopId} style={{ background: '#fff', borderRadius: 4, border: '0.5px solid #E8E4DE', padding: '14px 16px', marginBottom: 10 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 }}>
-                      <span style={{ fontSize: 14 }}>🧭</span>
-                      <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#fff', background: '#2D4A2D', padding: '2px 9px', borderRadius: 4 }}>Workshop</span>
+                    <div style={{ marginBottom: 5 }}>
+                      <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#fff', background: '#2D4A2D', padding: '2px 8px', borderRadius: 4 }}>Workshop</span>
                     </div>
                     <div style={{ fontSize: 15, fontWeight: 500, color: '#1a1a1a' }}>{workshop?.name}</div>
                     <div style={{ fontSize: 12, color: '#8C8C8C', marginTop: 3 }}>
@@ -1633,9 +1630,8 @@ export default function Home() {
                         const m = item.data
                         return (
                           <div key={m.id} style={{ background: '#F5F0E8', borderRadius: 4, padding: '14px 16px', marginBottom: 10, borderTop: '0.5px solid #E8D8BC', borderRight: '0.5px solid #E8D8BC', borderBottom: '0.5px solid #E8D8BC', borderLeft: '3px solid #C4A882' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 }}>
-                              <span style={{ fontSize: 14 }}>⛺</span>
-                              <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#5C3D1E', background: '#C4A882', padding: '2px 9px', borderRadius: 4 }}>All Campers</span>
+                            <div style={{ marginBottom: 5 }}>
+                              <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#5C3D1E', background: '#C4A882', padding: '2px 8px', borderRadius: 4 }}>All Campers</span>
                             </div>
                             <div style={{ fontSize: 15, fontWeight: 500, color: '#1a1a1a' }}>{m.name}</div>
                             <div style={{ fontSize: 12, color: '#8C8C8C', marginTop: 3 }}>
@@ -1653,9 +1649,8 @@ export default function Home() {
                       return (
                         <div key={m.id} style={{ background: '#fff', borderRadius: 4, padding: '14px 16px', marginBottom: 10, display: 'flex', gap: 12, alignItems: 'flex-start', borderTop: '0.5px dashed #E8E4DE', borderRight: '0.5px dashed #E8E4DE', borderBottom: '0.5px dashed #E8E4DE', borderLeft: '3px solid #B5622A' }}>
                           <div style={{ flex: 1 }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 5 }}>
-                              <span style={{ fontSize: 14 }}>🌿</span>
-                              <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#5C3D1E', background: '#F5E4CC', padding: '2px 9px', borderRadius: 4 }}>Drop In</span>
+                            <div style={{ marginBottom: 5 }}>
+                              <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#5C3D1E', background: '#F5E4CC', padding: '2px 8px', borderRadius: 4 }}>Drop-in</span>
                             </div>
                             <div style={{ fontSize: 15, fontWeight: 500, color: '#1a1a1a' }}>{m.name}</div>
                             <div style={{ fontSize: 12, color: '#8C8C8C', marginTop: 3 }}>
@@ -1857,14 +1852,11 @@ export default function Home() {
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {amenityMoments.map(m => (
-                    <div key={m.id} style={{ background: '#fff', borderRadius: 4, border: '0.5px solid #E8E4DE', padding: '14px 16px', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-                      <span style={{ fontSize: 20, flexShrink: 0, lineHeight: 1.3 }}>{amenityIcon(m.name)}</span>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 14, fontWeight: 600, color: '#1a1a1a' }}>{m.name}</div>
-                        {m.location && <div style={{ fontSize: 12, color: '#8C8C8C', marginTop: 2 }}>📍 {m.location}</div>}
-                        {m.hours_text && <div style={{ fontSize: 12, color: '#8C8C8C', marginTop: 2 }}>{m.hours_text}</div>}
-                        {m.description && <div style={{ fontSize: 12, color: '#8C8C8C', marginTop: 4, lineHeight: 1.5 }}>{m.description}</div>}
-                      </div>
+                    <div key={m.id} style={{ background: '#fff', borderRadius: 4, border: '0.5px solid #E8E4DE', padding: '14px 16px' }}>
+                      <div style={{ fontSize: 14, fontWeight: 600, color: '#1a1a1a' }}>{m.name}</div>
+                      {m.location && <div style={{ fontSize: 12, color: '#8C8C8C', marginTop: 2 }}>{m.location}</div>}
+                      {m.hours_text && <div style={{ fontSize: 12, color: '#8C8C8C', marginTop: 2 }}>{m.hours_text}</div>}
+                      {m.description && <div style={{ fontSize: 12, color: '#8C8C8C', marginTop: 4, lineHeight: 1.5 }}>{m.description}</div>}
                     </div>
                   ))}
                 </div>
@@ -1882,7 +1874,7 @@ export default function Home() {
                   {partnerMoments.map(m => (
                     <div key={m.id} style={{ background: '#fff', borderRadius: 4, border: '0.5px solid #E8E4DE', padding: '14px 16px' }}>
                       <div style={{ fontSize: 14, fontWeight: 600, color: '#1a1a1a' }}>{m.name}</div>
-                      {m.location && <div style={{ fontSize: 12, color: '#8C8C8C', marginTop: 2 }}>📍 {m.location}</div>}
+                      {m.location && <div style={{ fontSize: 12, color: '#8C8C8C', marginTop: 2 }}>{m.location}</div>}
                       {m.description && <div style={{ fontSize: 12, color: '#8C8C8C', marginTop: 4, lineHeight: 1.5 }}>{m.description}</div>}
                     </div>
                   ))}
@@ -2127,34 +2119,37 @@ export default function Home() {
       )}
 
       {/* Bottom nav — mobile only, replaces the top tab bar */}
-      <div className="spw-bottom-nav" style={{
-        position: 'fixed', bottom: 0, left: 0, right: 0,
-        background: '#FAFAF8', borderTop: '0.5px solid #E8E4DE',
-        paddingBottom: 'env(safe-area-inset-bottom)',
-        zIndex: 100
-      }}>
-        {[
-          ['schedule', 'Schedule', Calendar],
-          ['agenda', 'My Agenda', CheckSquare],
-          ['site', 'Site', MapPin],
-          ['guide', 'Guide', BookOpen],
-          ['packing', 'Packing List', ShoppingBag],
-        ].map(([tab, label, Icon]) => {
-          const active = activeTab === tab
-          return (
-            <button key={tab} onClick={() => setActiveTab(tab)} style={{
-              flex: 1, height: 56, display: 'flex', flexDirection: 'column',
-              alignItems: 'center', justifyContent: 'center', gap: 3,
-              border: 'none', background: 'none', cursor: 'pointer', padding: 0
-            }}>
-              <Icon size={20} strokeWidth={1.75} color={active ? '#1a1a1a' : '#AAAAAA'} />
-              <span style={{ fontSize: 10, letterSpacing: '0.04em', textTransform: 'uppercase', color: active ? '#1a1a1a' : '#AAAAAA' }}>
-                {label}
-              </span>
-            </button>
-          )
-        })}
-      </div>
+      {isMobile && (
+        <div style={{
+          display: 'flex',
+          position: 'fixed', bottom: 0, left: 0, right: 0,
+          background: '#FAFAF8', borderTop: '0.5px solid #E8E4DE',
+          paddingBottom: 'env(safe-area-inset-bottom)',
+          zIndex: 100
+        }}>
+          {[
+            ['schedule', 'Schedule', Calendar],
+            ['agenda', 'My Agenda', CheckSquare],
+            ['site', 'Site', MapPin],
+            ['guide', 'Guide', BookOpen],
+            ['packing', 'Packing List', ShoppingBag],
+          ].map(([tab, label, Icon]) => {
+            const active = activeTab === tab
+            return (
+              <button key={tab} onClick={() => { setActiveTab(tab); window.scrollTo({ top: 0, behavior: 'smooth' }) }} style={{
+                flex: 1, height: 56, display: 'flex', flexDirection: 'column',
+                alignItems: 'center', justifyContent: 'center', gap: 3,
+                border: 'none', background: 'none', cursor: 'pointer', padding: 0
+              }}>
+                <Icon size={20} strokeWidth={1.75} color={active ? '#1a1a1a' : '#AAAAAA'} />
+                <span style={{ fontSize: 10, letterSpacing: '0.04em', textTransform: 'uppercase', color: active ? '#1a1a1a' : '#AAAAAA' }}>
+                  {label}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
