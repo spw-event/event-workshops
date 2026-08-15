@@ -1,13 +1,13 @@
 import type { NextConfig } from "next";
 
+const baseConfig: NextConfig = {};
+
+// next-pwa uses a webpack plugin; only apply it in production where we
+// explicitly run `next build --webpack` to opt out of Turbopack (Next.js 16 default).
+// In dev, Turbopack runs as normal with no service worker overhead.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const withPWA = require('next-pwa')({
-  dest: 'public',
-  disable: process.env.NODE_ENV === 'development',
-  register: true,
-  skipWaiting: true,
-})
+const config = process.env.NODE_ENV === 'production'
+  ? require('next-pwa')({ dest: 'public', register: true, skipWaiting: true })(baseConfig)
+  : baseConfig
 
-const nextConfig: NextConfig = {};
-
-export default withPWA(nextConfig);
+export default config;

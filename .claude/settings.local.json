@@ -12,7 +12,17 @@
       "Bash(npm install *)",
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\('peerDependencies',{}\\), indent=2\\)\\)\")",
       "Bash(node -e \"const d = require\\('./node_modules/next-pwa/package.json'\\); console.log\\(JSON.stringify\\(d.peerDependencies, null, 2\\)\\)\")",
-      "Bash(node -e \"const m = require\\('./node_modules/next/dist/lib/metadata/types/metadata-interface.d.ts'\\); console.log\\('ok'\\)\")"
+      "Bash(node -e \"const m = require\\('./node_modules/next/dist/lib/metadata/types/metadata-interface.d.ts'\\); console.log\\('ok'\\)\")",
+      "Bash(node scripts/generate-icons.mjs)",
+      "Bash(node -e \"const n = require\\('next'\\); console.log\\(typeof n.Viewport\\)\")",
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\KyleWakayama\\\\Desktop\\\\snowpeak-workshops\\\\lib\" -Recurse -Force | Select-Object FullName | ForEach-Object { $_.FullName.Replace\\(\"c:\\\\Users\\\\KyleWakayama\\\\Desktop\\\\snowpeak-workshops\\\\\", \"\"\\) })",
+      "Bash(node -e \"const p=require\\('./package.json'\\);console.log\\(p.version||'N/A'\\);console.log\\(JSON.stringify\\(p.dependencies,null,2\\)\\)\")",
+      "Bash(node -e ' *)",
+      "Bash(git diff *)",
+      "Bash(node \"C:\\\\Users\\\\KYLEWA~1\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-KyleWakayama-Desktop-snowpeak-workshops\\\\20c8c75a-cc2e-4e61-8b09-47eb55f5fa46\\\\scratchpad\\\\test-parse2.mjs\")",
+      "Bash(npx eslint *)",
+      "Bash(curl -s 'https://dfzaamudultyzxdngvyi.supabase.co/rest/v1/event_info_sections?select=*&limit=20' -H 'apikey: sb_publishable_a1ezqTxfm0kez9FgaMuFug_hMX0YaS0' -H 'Authorization: Bearer sb_publishable_a1ezqTxfm0kez9FgaMuFug_hMX0YaS0')",
+      "Bash(curl -s https://dfzaamudultyzxdngvyi.supabase.co/rest/v1/events?select=id,name,checkin_time,checkout_time -H 'apikey: sb_publishable_a1ezqTxfm0kez9FgaMuFug_hMX0YaS0' -H 'Authorization: Bearer sb_publishable_a1ezqTxfm0kez9FgaMuFug_hMX0YaS0')"
     ]
   }
 }
