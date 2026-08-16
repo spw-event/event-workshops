@@ -926,6 +926,12 @@ export default function Home() {
   async function cancel(registrationId, sessionId, partySize) {
     setMessage(null)
 
+    const session = sessions.find(s => s.id === sessionId)
+    if (isSessionPast(session)) {
+      setMessage({ type: 'error', text: 'This session has already happened — it can no longer be cancelled.' })
+      return
+    }
+
     const { error: delError } = await supabase
       .from('registrations')
       .delete()
@@ -1086,6 +1092,13 @@ export default function Home() {
     return registrations.find(r => r.session_id === sessionId)
   }
 
+  // Naive local-time comparison, matching how session dates/times are
+  // displayed everywhere else in this file (no per-session timezone data exists).
+  function isSessionPast(session) {
+    if (!session?.date || !session?.start_time) return false
+    return new Date(session.date + 'T' + session.start_time) <= new Date()
+  }
+
   function formatTime(t) {
     if (!t) return ''
     const [h, m] = t.split(':')
@@ -1128,8 +1141,9 @@ export default function Home() {
 
   // Amenities repeat daily and live in the Site tab, not the Schedule tab.
   const amenityMoments = openMoments.filter(m => m.moment_type === 'amenity')
-  // Mandatory + drop-in moments — the only things pre-registration guests can see.
-  const scheduleMoments = openMoments.filter(m => m.moment_type !== 'amenity')
+  // Mandatory All Campers moments are the only thing pre-registration guests can see —
+  // workshops and drop-in moments stay hidden until registration_opens_at.
+  const mandatoryMoments = openMoments.filter(m => m.moment_type === 'mandatory')
   // Forward-compatible: no `category` column exists yet, so this is always
   // empty today — the Site tab's Partners section hides itself accordingly.
   const partnerMoments = openMoments.filter(m => m.category === 'partner')
@@ -1292,9 +1306,17 @@ export default function Home() {
         {/* Header */}
         <div style={{ marginBottom: 32, textAlign: 'center' }}>
           <img src="/spw-logo.png" alt="Snow Peak Way" style={{ width: 120, display: 'block', margin: '0 auto 28px' }} />
-          <div className={playfair.className} style={{ fontSize: 22, fontWeight: 400, letterSpacing: '0.01em' }}>
-            Welcome, {guest?.name?.split(' ')[0]}
-          </div>
+
+          {selectedEvent && (
+            <>
+              <div className={playfair.className} style={{ fontSize: 22, fontWeight: 400, color: '#1a1a1a' }}>
+                {selectedEvent.name}
+              </div>
+              <div style={{ fontSize: 13, color: '#8C8C8C', marginTop: 4, lineHeight: 1.5 }}>
+                {selectedEvent.location ? selectedEvent.location + ' · ' : ''}{new Date(selectedEvent.start_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}–{new Date(selectedEvent.end_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+              </div>
+            </>
+          )}
 
           {myEvents.length > 1 && (
             <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap', justifyContent: 'center' }}>
@@ -1313,25 +1335,21 @@ export default function Home() {
             </div>
           )}
 
-          {selectedEvent && (
-            <>
-              <div className={playfair.className} style={{ fontSize: 24, fontWeight: 400, marginTop: 10, color: '#1a1a1a' }}>
-                {selectedEvent.name}
-              </div>
-              <div style={{ fontSize: 13, color: '#8C8C8C', marginTop: 4, lineHeight: 1.5 }}>
-                {selectedEvent.location ? selectedEvent.location + ' · ' : ''}{new Date(selectedEvent.start_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}–{new Date(selectedEvent.end_date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-              </div>
-            </>
+          {guest?.name && (
+            <div className={playfair.className} style={{ fontSize: 18, fontWeight: 400, color: '#1a1a1a', marginTop: 14, textAlign: 'center' }}>
+              {guest.name}
+            </div>
+          )}
+
+          {guest?.ticket_types && !selectedEvent?.is_archived && (
+            <div style={{ fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#8C8C8C', marginTop: 8, textAlign: 'center' }}>
+              {guest.ticket_types.display_name || guest.ticket_types.name}
+            </div>
           )}
 
           {guest?.ticket_types && registrationOpen && !selectedEvent?.is_archived && (
-            <div style={{ fontSize: 12, marginTop: 4, letterSpacing: '0.02em' }}>
-              <span style={{ color: '#8C8C8C' }}>{guest.ticket_types.name}</span>
-              {creditsRemaining > 0 ? (
-                <span style={{ color: '#2D4A2D', fontWeight: 600 }}> · {creditsRemaining} credit{creditsRemaining === 1 ? '' : 's'} available</span>
-              ) : (
-                <span style={{ color: '#8C8C8C' }}> · All credits used</span>
-              )}
+            <div style={{ fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase', marginTop: 4, textAlign: 'center', color: creditsRemaining > 0 ? '#1a1a1a' : '#8C8C8C' }}>
+              {creditsRemaining} credit{creditsRemaining === 1 ? '' : 's'} remaining
             </div>
           )}
           {guestEvent?.booking_summary && (
@@ -1397,10 +1415,14 @@ export default function Home() {
               </div>
             )}
 
-            {/* Explainer — event-editable, falls back to the default below */}
-            <div style={{ fontSize: 12, fontStyle: 'italic', color: '#8C8C8C', lineHeight: 1.5, marginBottom: 16 }}>
-              {selectedEvent?.schedule_explainer || 'Workshops require a reservation and use your credits. Open activities are drop-in — just show up, or save them to your agenda.'}
-            </div>
+            {/* Explainer — event-editable, falls back to the default below.
+                Hidden pre-registration since it references reservations/credits
+                that aren't relevant until workshops are visible. */}
+            {registrationOpen && (
+              <div style={{ fontSize: 12, fontStyle: 'italic', color: '#8C8C8C', lineHeight: 1.5, marginBottom: 16 }}>
+                {selectedEvent?.schedule_explainer || 'Workshops require a reservation and use your credits. Open activities are drop-in — just show up, or save them to your agenda.'}
+              </div>
+            )}
 
             {!registrationOpen && opensAt && (
               <div style={{ fontSize: 13, color: '#5C3D1E', background: '#F5F0E8', borderRadius: 4, padding: '10px 14px', marginBottom: 16 }}>
@@ -1408,7 +1430,7 @@ export default function Home() {
               </div>
             )}
 
-            {!registrationOpen && scheduleMoments.length === 0 ? (
+            {!registrationOpen && mandatoryMoments.length === 0 ? (
               <div style={{ textAlign: 'center', padding: '4rem 0' }}>
                 <div style={{ fontSize: 12, fontWeight: 500, letterSpacing: '0.25em', textTransform: 'uppercase', color: '#B0ABA3' }}>
                   More to come.
@@ -1467,6 +1489,7 @@ export default function Home() {
                 )
 
                 if (registered) {
+                  const sessionPast = isSessionPast(session)
                   return (
                     <div style={{ marginTop: 12, paddingTop: 12, borderTop: '0.5px solid #E8E4DE' }}>
                       {timeRange}
@@ -1474,8 +1497,14 @@ export default function Home() {
                         <div style={{ fontSize: 12, color: '#8C8C8C', flex: 1 }}>
                           {reg?.party_size > 1 ? reg.party_size + ' people' : '1 person'} reserved
                         </div>
-                        <button onClick={() => generateICS(session)} style={{ fontSize: 11, padding: '5px 10px', cursor: 'pointer', border: '0.5px solid #C0D4C0', borderRadius: 4, background: '#fff', color: '#2D4A2D' }}>+ Cal</button>
-                        <button onClick={() => cancel(reg.id, session.id, reg?.party_size)} style={{ fontSize: 11, padding: '5px 10px', cursor: 'pointer', border: '0.5px solid #E8E4DE', borderRadius: 4, background: '#fff', color: '#8C8C8C' }}>Release spot</button>
+                        {sessionPast ? (
+                          <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#8C8C8C' }}>Session complete</span>
+                        ) : (
+                          <>
+                            <button onClick={() => generateICS(session)} style={{ fontSize: 11, padding: '5px 10px', cursor: 'pointer', border: '0.5px solid #C0D4C0', borderRadius: 4, background: '#fff', color: '#2D4A2D' }}>+ Cal</button>
+                            <button onClick={() => cancel(reg.id, session.id, reg?.party_size)} style={{ fontSize: 11, padding: '5px 10px', cursor: 'pointer', border: '0.5px solid #E8E4DE', borderRadius: 4, background: '#fff', color: '#8C8C8C' }}>Release spot</button>
+                          </>
+                        )}
                       </div>
                     </div>
                   )
@@ -1593,7 +1622,7 @@ export default function Home() {
 
               const renderDay = (date) => {
                 const daySessions = sessions.filter(s => s.date === date)
-                const dayMoments = openMoments.filter(m => m.date === date && m.moment_type !== 'amenity')
+                const dayMoments = openMoments.filter(m => m.date === date && m.moment_type !== 'amenity' && (registrationOpen || m.moment_type === 'mandatory'))
 
                 const workshopGroups = {}
                 daySessions.forEach(s => {
@@ -1785,14 +1814,26 @@ export default function Home() {
 
                           /* Workshop registration */
                           const reg = item.data
+                          const past = isSessionPast(reg.sessions)
                           return (
-                            <div key={reg.id} style={{ background: '#EEF3EE', borderRadius: 4, padding: '13px 16px', marginBottom: 10, borderTop: '0.5px solid #C0D4C0', borderRight: '0.5px solid #C0D4C0', borderBottom: '0.5px solid #C0D4C0', borderLeft: '3px solid #2D4A2D' }}>
+                            <div key={reg.id} style={{
+                              background: past ? '#F5F5F3' : '#EEF3EE', borderRadius: 4, padding: '13px 16px', marginBottom: 10,
+                              borderTop: '0.5px solid ' + (past ? '#E0DDD7' : '#C0D4C0'),
+                              borderRight: '0.5px solid ' + (past ? '#E0DDD7' : '#C0D4C0'),
+                              borderBottom: '0.5px solid ' + (past ? '#E0DDD7' : '#C0D4C0'),
+                              borderLeft: '3px solid ' + (past ? '#C8C4BC' : '#2D4A2D'),
+                              opacity: past ? 0.7 : 1
+                            }}>
                               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
                                 <div style={{ flex: 1 }}>
                                   <div style={{ marginBottom: 4 }}>
-                                    <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#fff', background: '#2D4A2D', padding: '2px 9px', borderRadius: 4 }}>✓ Reserved</span>
+                                    {past ? (
+                                      <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#8C8C8C', background: '#E8E4DE', padding: '2px 9px', borderRadius: 4 }}>Complete</span>
+                                    ) : (
+                                      <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#fff', background: '#2D4A2D', padding: '2px 9px', borderRadius: 4 }}>✓ Reserved</span>
+                                    )}
                                   </div>
-                                  <div style={{ fontSize: 14, fontWeight: 600, color: '#1a1a1a' }}>{reg.sessions?.workshops?.name}</div>
+                                  <div style={{ fontSize: 14, fontWeight: 600, color: past ? '#8C8C8C' : '#1a1a1a' }}>{reg.sessions?.workshops?.name}</div>
                                   <div style={{ fontSize: 12, color: '#8C8C8C', marginTop: 2 }}>
                                     {formatTime(reg.sessions?.start_time)} – {formatTime(reg.sessions?.end_time)}
                                     {reg.party_size > 1 ? ' · ' + reg.party_size + ' people' : ''}
@@ -1801,9 +1842,11 @@ export default function Home() {
                                     <div style={{ fontSize: 11, color: '#8C8C8C', marginTop: 2 }}>📍 {reg.sessions.workshops.location}</div>
                                   )}
                                 </div>
-                                <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                                  <button onClick={() => cancel(reg.id, reg.session_id, reg.party_size)} style={{ fontSize: 11, padding: '4px 10px', cursor: 'pointer', borderTop: '0.5px solid #E8E4DE', borderRight: '0.5px solid #E8E4DE', borderBottom: '0.5px solid #E8E4DE', borderLeft: '0.5px solid #E8E4DE', borderRadius: 4, background: '#fff', color: '#8C8C8C' }}>Release spot</button>
-                                </div>
+                                {!past && (
+                                  <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                                    <button onClick={() => cancel(reg.id, reg.session_id, reg.party_size)} style={{ fontSize: 11, padding: '4px 10px', cursor: 'pointer', borderTop: '0.5px solid #E8E4DE', borderRight: '0.5px solid #E8E4DE', borderBottom: '0.5px solid #E8E4DE', borderLeft: '0.5px solid #E8E4DE', borderRadius: 4, background: '#fff', color: '#8C8C8C' }}>Release spot</button>
+                                  </div>
+                                )}
                               </div>
                             </div>
                           )
