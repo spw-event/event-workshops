@@ -109,8 +109,7 @@ function renderInfoContent(content) {
 }
 
 function EventInfoAccordion({ event, sections, partners }) {
-  const [openIndex, setOpenIndex] = useState(null)
-  const [partnersOpen, setPartnersOpen] = useState(false)
+  const [openSection, setOpenSection] = useState(null)
   const ordered = [...sections].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
   const orderedPartners = [...(partners || [])].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
 
@@ -173,11 +172,11 @@ function EventInfoAccordion({ event, sections, partners }) {
       ) : (
         <div>
           {ordered.map(s => {
-            const open = openIndex === s.id
+            const open = openSection === s.id
             return (
               <div key={s.id}>
                 <button
-                  onClick={() => setOpenIndex(open ? null : s.id)}
+                  onClick={() => setOpenSection(open ? null : s.id)}
                   style={{
                     width: '100%', display: 'flex', alignItems: 'center', gap: 10,
                     padding: '14px 0', background: 'none',
@@ -201,10 +200,12 @@ function EventInfoAccordion({ event, sections, partners }) {
         </div>
       )}
 
-      {orderedPartners.length > 0 && (
+      {orderedPartners.length > 0 && (() => {
+        const partnersOpen = openSection === 'partners'
+        return (
         <div style={{ marginTop: ordered.length > 0 ? 8 : 0 }}>
           <button
-            onClick={() => setPartnersOpen(o => !o)}
+            onClick={() => setOpenSection(partnersOpen ? null : 'partners')}
             style={{
               width: '100%', display: 'flex', alignItems: 'center', gap: 10,
               padding: '14px 0', background: 'none',
@@ -248,7 +249,8 @@ function EventInfoAccordion({ event, sections, partners }) {
             </div>
           </div>
         </div>
-      )}
+        )
+      })()}
     </div>
   )
 }
@@ -2041,10 +2043,10 @@ export default function Home() {
       {/* Install / offline banner */}
       {showInstallBanner && (
         <div style={{
-          position: 'fixed', bottom: 0, left: 0, right: 0,
+          position: 'fixed', bottom: isMobile ? 'calc(56px + env(safe-area-inset-bottom))' : 0, left: 0, right: 0,
           background: '#FAFAF8', borderTop: '0.5px solid #E8E4DE',
           padding: '14px 16px',
-          paddingBottom: 'calc(14px + env(safe-area-inset-bottom, 0px))',
+          paddingBottom: isMobile ? 14 : 'calc(14px + env(safe-area-inset-bottom, 0px))',
           zIndex: 9999, display: 'flex', alignItems: 'flex-start', gap: 12,
           fontFamily: 'sans-serif'
         }}>
