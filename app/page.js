@@ -455,6 +455,7 @@ export default function Home() {
         .from('gear_items')
         .select('id, event_id, name, category, description, link_1_label, link_1_url, link_2_label, link_2_url, is_available_to_rent, sort_order')
         .in('event_id', events.map(e => e.id))
+        .eq('is_staff_only', false)
         .order('sort_order')
       allGear = gearData || []
       setGearItems(allGear)

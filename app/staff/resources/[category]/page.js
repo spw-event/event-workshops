@@ -27,7 +27,7 @@ export default function StaffResourceCategoryPage() {
       // trust localStorage blindly — matches the login check on /staff itself.
       const { data: staffData } = await supabase
         .from('staff')
-        .select('id')
+        .select('id, is_vendor')
         .eq('id', staffId)
         .eq('is_active', true)
         .single()
@@ -54,6 +54,7 @@ export default function StaffResourceCategoryPage() {
       const filtered = (data || [])
         .filter(r => r.event_id === eventId || r.is_global)
         .filter(r => (r.category || 'All Events') === category)
+        .filter(r => !(staffData.is_vendor && r.hidden_from_vendors))
 
       setResources(filtered)
       setLoading(false)

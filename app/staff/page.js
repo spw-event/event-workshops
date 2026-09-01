@@ -15,11 +15,12 @@ export default function StaffPage() {
   const [activeTab, setActiveTab] = useState('schedule')
 
   const [myAssignments, setMyAssignments] = useState([])
-  const [allAssignments, setAllAssignments] = useState([])
   const [allSessions, setAllSessions] = useState([])
   const [allMoments, setAllMoments] = useState([])
-  const [allShifts, setAllShifts] = useState([])
   const [staffResources, setStaffResources] = useState([])
+  const [eventInfoSections, setEventInfoSections] = useState([])
+  const [eventPartners, setEventPartners] = useState([])
+  const [gearItems, setGearItems] = useState([])
   const [registrations, setRegistrations] = useState([])
   const [guestEvents, setGuestEvents] = useState([])
   const [events, setEvents] = useState([])
@@ -33,6 +34,16 @@ export default function StaffPage() {
   const [activeGuestLookup, setActiveGuestLookup] = useState(null)
   const [guestQuery, setGuestQuery] = useState('')
   const [guestResults, setGuestResults] = useState([])
+
+  // Public Schedule tab (read-only reference view of the full guest schedule)
+  const [pubDayFilter, setPubDayFilter] = useState('all')
+  const [pubTypeFilter, setPubTypeFilter] = useState('all')
+  const [pubExpandedSessionId, setPubExpandedSessionId] = useState(null)
+  const [expandedPublicRosters, setExpandedPublicRosters] = useState({})
+
+  // Guide tab — which info section (by id) is currently expanded
+  const [guideSection, setGuideSection] = useState(null)
+  const [mapFullscreen, setMapFullscreen] = useState(false)
 
   // Persists whichever record just authenticated (from a staff-table row or
   // an instructor_pins row) under the same unified keys /login writes, plus
@@ -144,50 +155,58 @@ export default function StaffPage() {
   async function loadData(staffRecord) {
     const [
       { data: myA, error: myAError },
-      { data: allA, error: allAError },
       { data: regs },
       { data: evts },
       { data: ge },
       { data: sess },
       { data: mom },
-      { data: shifts },
       { data: seaData },
-      { data: res }
+      { data: res },
+      { data: swa },
+      { data: infoSections },
+      { data: partners },
+      { data: gear }
     ] = await Promise.all([
       supabase.from('staff_assignments')
         .select('id, staff_id, session_id, moment_id, shift_id, sessions(id, date, start_time, end_time, capacity, event_id, workshops(name, location)), open_moments(id, name, date, start_time, end_time, location, moment_type, event_id), staff_shifts(id, title, shift_date, start_time, end_time, location, shift_type, description, event_id)')
         .eq('staff_id', staffRecord.id),
-      supabase.from('staff_assignments')
-        .select('*, staff(id, name), sessions(id, date, start_time, end_time, event_id, workshops(name, location)), open_moments(id, name, date, start_time, end_time, location, moment_type, event_id), staff_shifts(id, title, shift_date, start_time, end_time, location, shift_type, event_id)')
-        .not('staff_id', 'is', null),
       supabase.from('registrations').select('*, guests(id, name)').eq('status', 'confirmed'),
       supabase.from('events').select('*').order('start_date'),
       supabase.from('guest_events').select('*, guests(id, name)'),
-      supabase.from('sessions').select('*, workshops(name, location)').order('date').order('start_time'),
+      supabase.from('sessions').select('*, workshops(name, location, instructor, description)').order('date').order('start_time'),
       supabase.from('open_moments').select('*').order('date').order('start_time'),
-      supabase.from('staff_shifts').select('*').order('shift_date').order('start_time'),
       supabase.from('staff_event_assignments').select('*, events(id, name, status)').eq('staff_id', staffRecord.id),
-      supabase.from('staff_resources').select('*').order('sort_order')
+      supabase.from('staff_resources').select('*').order('sort_order'),
+      supabase.from('staff_workshop_assignments').select('*').eq('staff_id', staffRecord.id),
+      supabase.from('event_info_sections').select('*').order('sort_order'),
+      supabase.from('event_partners').select('*').order('sort_order'),
+      supabase.from('gear_items').select('*').order('sort_order')
     ])
     console.log('[loadData] staffRecord.id:', staffRecord.id)
     console.log('[loadData] myA count:', myA?.length ?? 'null', 'error:', myAError ? JSON.stringify(myAError) : null)
     if (myA?.length) console.log('[loadData] myA[0]:', JSON.stringify(myA[0]))
-    console.log('[loadData] allA count:', allA?.length ?? 'null', 'error:', allAError ? JSON.stringify(allAError) : null)
     setMyAssignments(myA || [])
-    setAllAssignments(allA || [])
     setRegistrations(regs || [])
     setEvents(evts || [])
     setGuestEvents(ge || [])
     setAllSessions(sess || [])
     setAllMoments(mom || [])
-    setAllShifts(shifts || [])
     setStaffResources(res || [])
+    setEventInfoSections(infoSections || [])
+    setEventPartners(partners || [])
+    setGearItems(gear || [])
     // Union: staff_event_assignments + events derived from actual assignments
     const seaEvts = (seaData || []).map(sea => sea.events).filter(Boolean)
     const seaEventIds = new Set(seaEvts.map(e => e.id))
     const assignmentEventIds = new Set((myA || []).map(a =>
       a.sessions?.event_id || a.open_moments?.event_id || a.staff_shifts?.event_id
     ).filter(Boolean))
+    // Vendor workshop-wide assignments also count toward "events with assignments",
+    // even when the vendor has no direct staff_assignments/staff_event_assignments row.
+    const workshopIdsForEvents = (swa || []).map(a => a.workshop_id)
+    for (const s of (sess || [])) {
+      if (workshopIdsForEvents.includes(s.workshop_id) && s.event_id) assignmentEventIds.add(s.event_id)
+    }
     const evtsFromAssignments = (evts || []).filter(e => assignmentEventIds.has(e.id) && !seaEventIds.has(e.id))
     const evtsWithA = [...seaEvts, ...evtsFromAssignments].filter(e => !e.is_archived)
     setEventsWithAssignments(evtsWithA)
@@ -358,68 +377,18 @@ export default function StaffPage() {
     )
   }
 
-  function buildAllItems() {
-    if (!selectedEvent) return []
-    const eid = selectedEvent.id
-    const items = []
-
-    allSessions.filter(s => s.event_id === eid).forEach(s => {
-      items.push({
-        key: 'session_' + s.id, date: s.date, start: s.start_time,
-        time: formatTime(s.start_time) + ' – ' + formatTime(s.end_time),
-        title: s.workshops?.name || 'Workshop',
-        location: s.workshops?.location || '',
-        type: 'Workshop', typeColor: '#2D4A2D', typeBg: '#EEF3EE',
-        isStaffOnly: false,
-        staff: allAssignments.filter(a => a.session_id === s.id).map(a => a.staff?.name).filter(Boolean)
-      })
-    })
-
-    allMoments.filter(m => m.event_id === eid).forEach(m => {
-      const isMand = m.moment_type === 'mandatory'
-      items.push({
-        key: 'moment_' + m.id, date: m.date, start: m.start_time,
-        time: formatTime(m.start_time) + ' – ' + formatTime(m.end_time),
-        title: m.name, location: m.location || '',
-        type: isMand ? 'Mandatory' : 'Open Moment',
-        typeColor: isMand ? '#7A5C3C' : '#B5622A',
-        typeBg: isMand ? '#F5F0E8' : '#FDF5EE',
-        isStaffOnly: false,
-        staff: allAssignments.filter(a => a.moment_id === m.id).map(a => a.staff?.name).filter(Boolean)
-      })
-    })
-
-    allShifts.filter(s => s.event_id === eid).forEach(s => {
-      items.push({
-        key: 'shift_' + s.id, date: s.date, start: s.start_time,
-        time: formatTime(s.start_time) + ' – ' + formatTime(s.end_time),
-        title: s.title, location: s.location || '',
-        type: s.shift_type || 'General', typeColor: '#666', typeBg: '#EFEDEA',
-        isStaffOnly: true,
-        staff: allAssignments.filter(a => a.shift_id === s.id).map(a => a.staff?.name).filter(Boolean)
-      })
-    })
-
-    return items
-  }
-
-  // Filter My Schedule to the selected event
+  // Filter this staff member's own assignments to the selected event, then to
+  // staff-shift assignments only — My Agenda is back-of-house shift coverage;
+  // session/moment duty is now referenced via the read-only Schedule tab instead.
   const myFilteredAssignments = selectedEvent
     ? myAssignments.filter(a => {
         const eid = a.sessions?.event_id || a.open_moments?.event_id || a.staff_shifts?.event_id
         return eid === selectedEvent.id
       })
     : myAssignments
-  console.log('[render] myAssignments:', myAssignments.length, 'selectedEvent:', selectedEvent?.id, 'filtered:', myFilteredAssignments.length)
-  const myGrouped = groupByDate(myFilteredAssignments)
+  const myShiftAssignments = myFilteredAssignments.filter(a => a.staff_shifts)
+  const myGrouped = groupByDate(myShiftAssignments)
   const myDates = Object.keys(myGrouped).sort()
-  const allItems = buildAllItems()
-  const allByDate = {}
-  allItems.forEach(item => {
-    if (!allByDate[item.date]) allByDate[item.date] = []
-    allByDate[item.date].push(item)
-  })
-  const allDates = Object.keys(allByDate).sort()
 
   const card = { background: '#fff', border: '0.5px solid #e8e8e8', borderRadius: 12, padding: '14px 18px', marginBottom: 10 }
   const inp = { width: '100%', fontSize: 14, padding: '9px 12px', borderRadius: 8, border: '0.5px solid #d0d0d0', boxSizing: 'border-box' }
@@ -427,9 +396,11 @@ export default function StaffPage() {
   const dateHdr = { fontSize: 11, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#8C8C8C', marginTop: 24, marginBottom: 10, paddingBottom: 8, borderBottom: '0.5px solid #E8E4DE' }
   const badge = (bg, color) => ({ display: 'inline-block', fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: 20, background: bg, color })
 
-  // Shared between the full staff dashboard and the vendor-limited dashboard
   function renderResourcesTab() {
-    const visible = staffResources.filter(r => selectedEvent && (r.event_id === selectedEvent.id || r.is_global))
+    const visible = staffResources.filter(r =>
+      selectedEvent && (r.event_id === selectedEvent.id || r.is_global) &&
+      !(staffMember?.is_vendor && r.hidden_from_vendors)
+    )
     if (visible.length === 0) {
       return (
         <div style={{ textAlign: 'center', color: '#8C8C8C', padding: '48px 0', fontSize: 14 }}>
@@ -459,6 +430,382 @@ export default function StaffPage() {
             <span style={{ fontSize: 12, color: '#8C8C8C' }}>{catCounts[cat]}</span>
             <span style={{ fontSize: 16, color: '#8C8C8C' }}>→</span>
           </a>
+        ))}
+      </div>
+    )
+  }
+
+  // Read-only reference view of the full public schedule for the selected event —
+  // same visual layout as the guest Schedule tab (day/type pills, workshop cards
+  // with time-slot pills, open moment cards), but with guest count/roster in place
+  // of reserve/waitlist controls, and no party size or credits UI.
+  function renderPublicScheduleTab() {
+    if (!selectedEvent) {
+      return <div style={{ textAlign: 'center', color: '#8C8C8C', padding: '48px 0', fontSize: 14 }}>Select an event to view its schedule.</div>
+    }
+    const eid = selectedEvent.id
+    const eventSessions = allSessions.filter(s => s.event_id === eid)
+    const eventMoments = allMoments.filter(m => m.event_id === eid && m.moment_type !== 'amenity')
+    const pubAllDates = [...new Set([
+      ...eventSessions.map(s => s.date),
+      ...eventMoments.map(m => m.date)
+    ].filter(Boolean))].sort()
+    const datesToShow = pubDayFilter === 'all' ? pubAllDates : [pubDayFilter]
+    const showWorkshops = pubTypeFilter === 'all' || pubTypeFilter === 'workshops'
+    const showMoments = pubTypeFilter === 'all' || pubTypeFilter === 'moments'
+
+    const renderSessionExpansion = session => {
+      const sessionRegs = registrations.filter(r => r.session_id === session.id)
+      const totalGuests = sessionRegs.reduce((s, r) => s + (r.party_size || 1), 0)
+      const rosterOpen = !!expandedPublicRosters[session.id]
+      const lookupOpen = activeGuestLookup === session.id
+      return (
+        <div style={{ marginTop: 12, paddingTop: 12, borderTop: '0.5px solid #E8E4DE' }}>
+          <div style={{ fontSize: 14, fontWeight: 600, color: '#1a1a1a', marginBottom: 10 }}>
+            {formatTime(session.start_time)} – {formatTime(session.end_time)}
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 13, color: '#555', flex: 1 }}>
+              {totalGuests}{session.capacity != null ? ' / ' + session.capacity : ''} registered
+            </div>
+            <button onClick={() => setExpandedPublicRosters(r => ({ ...r, [session.id]: !rosterOpen }))}
+              style={{ ...btn('#fff'), fontSize: 12, padding: '4px 12px' }}>
+              {rosterOpen ? 'Hide roster' : 'View roster'}
+            </button>
+            <button onClick={() => toggleLookup(session.id)}
+              style={{ ...btn(lookupOpen ? '#1a1a1a' : '#fff', lookupOpen ? '#fff' : '#1a1a1a'), fontSize: 12, padding: '4px 12px' }}>
+              Guest Lookup
+            </button>
+          </div>
+          {rosterOpen && (
+            <div style={{ marginTop: 10 }}>
+              {sessionRegs.length === 0
+                ? <div style={{ fontSize: 13, color: '#aaa' }}>No registrations yet.</div>
+                : sessionRegs.map(r => (
+                  <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 10px', background: '#F7F6F4', borderRadius: 8, fontSize: 13, marginBottom: 4 }}>
+                    <span>{r.guests?.name}</span>
+                    {r.party_size > 1 && <span style={{ color: '#8C8C8C' }}>party of {r.party_size}</span>}
+                  </div>
+                ))}
+            </div>
+          )}
+          {renderGuestLookup(session.id)}
+        </div>
+      )
+    }
+
+    const renderTimeSlotPill = session => {
+      const sessionRegs = registrations.filter(r => r.session_id === session.id)
+      const totalGuests = sessionRegs.reduce((s, r) => s + (r.party_size || 1), 0)
+      const isFull = session.capacity != null && totalGuests >= session.capacity
+      const isExpanded = pubExpandedSessionId === session.id
+      return (
+        <button key={session.id} onClick={() => setPubExpandedSessionId(isExpanded ? null : session.id)} style={{
+          padding: '8px 14px', borderRadius: 20, cursor: 'pointer',
+          fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap',
+          background: isFull ? '#F0EDEA' : '#fff',
+          border: '0.5px solid ' + (isFull ? '#E8E4DE' : '#1a1a1a'),
+          color: isFull ? '#8C8C8C' : '#1a1a1a',
+          outline: isExpanded ? '2px solid #1a1a1a' : 'none', outlineOffset: 1
+        }}>
+          {formatTime(session.start_time)} – {formatTime(session.end_time)}
+          {' · ' + totalGuests + (session.capacity != null ? '/' + session.capacity : '')}
+        </button>
+      )
+    }
+
+    const renderWorkshopCard = group => {
+      const workshop = group.workshop
+      const expandedSession = group.sessions.find(s => s.id === pubExpandedSessionId)
+      return (
+        <div key={group.workshopId} style={{ background: '#fff', borderRadius: 4, border: '0.5px solid #E8E4DE', padding: '14px 16px', marginBottom: 10 }}>
+          <div style={{ marginBottom: 5 }}>
+            <span style={badge('#EEF3EE', '#2D4A2D')}>Workshop</span>
+          </div>
+          <div style={{ fontSize: 15, fontWeight: 500, color: '#1a1a1a' }}>{workshop?.name}</div>
+          <div style={{ fontSize: 12, color: '#8C8C8C', marginTop: 3 }}>
+            {workshop?.instructor || ''}{workshop?.instructor && workshop?.location ? ' · ' : ''}{workshop?.location ? '📍 ' + workshop.location : ''}
+          </div>
+          {workshop?.description && <div style={{ fontSize: 12, color: '#8C8C8C', marginTop: 6, lineHeight: 1.5 }}>{workshop.description}</div>}
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+            {group.sessions.map(renderTimeSlotPill)}
+          </div>
+          {expandedSession && renderSessionExpansion(expandedSession)}
+        </div>
+      )
+    }
+
+    const renderMomentCard = (m, isMandatory) => {
+      const lookupOpen = activeGuestLookup === m.id
+      return (
+        <div key={m.id} style={{
+          background: isMandatory ? '#F5F0E8' : '#fff', borderRadius: 4, padding: '14px 16px', marginBottom: 10,
+          border: '0.5px solid ' + (isMandatory ? '#E8D8BC' : '#E8E4DE'),
+          borderLeft: '3px solid ' + (isMandatory ? '#C4A882' : '#B5622A')
+        }}>
+          <div style={{ marginBottom: 5 }}>
+            <span style={badge(isMandatory ? '#C4A882' : '#F5E4CC', '#5C3D1E')}>
+              {isMandatory ? 'All Campers' : 'Drop-in'}
+            </span>
+          </div>
+          <div style={{ fontSize: 15, fontWeight: 500, color: '#1a1a1a' }}>{m.name}</div>
+          <div style={{ fontSize: 12, color: '#8C8C8C', marginTop: 3 }}>
+            {formatTime(m.start_time)}{m.end_time ? ' – ' + formatTime(m.end_time) : ''}
+            {m.location ? ' · 📍 ' + m.location : ''}
+          </div>
+          {m.description && <div style={{ fontSize: 11, color: '#8C8C8C', marginTop: 4, lineHeight: 1.5 }}>{m.description}</div>}
+          <div style={{ marginTop: 10, paddingTop: 10, borderTop: '0.5px solid ' + (isMandatory ? '#E8D8BC' : '#F0EDE8') }}>
+            <button onClick={() => toggleLookup(m.id)}
+              style={{ ...btn(lookupOpen ? '#1a1a1a' : '#fff', lookupOpen ? '#fff' : '#1a1a1a'), fontSize: 12, padding: '4px 12px' }}>
+              Guest Lookup
+            </button>
+            {renderGuestLookup(m.id)}
+          </div>
+        </div>
+      )
+    }
+
+    const renderDay = date => {
+      const daySessions = eventSessions.filter(s => s.date === date)
+      const dayMoments = eventMoments.filter(m => m.date === date)
+      const workshopGroups = {}
+      if (showWorkshops) {
+        daySessions.forEach(s => {
+          if (!workshopGroups[s.workshop_id]) workshopGroups[s.workshop_id] = { workshopId: s.workshop_id, workshop: s.workshops, sessions: [] }
+          workshopGroups[s.workshop_id].sessions.push(s)
+        })
+        Object.values(workshopGroups).forEach(g => g.sessions.sort((a, b) => (a.start_time || '').localeCompare(b.start_time || '')))
+      }
+      const dayItems = [
+        ...(showWorkshops ? Object.values(workshopGroups).map(g => ({ type: 'workshop', group: g, time: g.sessions[0]?.start_time || '' })) : []),
+        ...(showMoments ? dayMoments.map(m => ({ type: m.moment_type === 'mandatory' ? 'mandatory' : 'optional', data: m, time: m.start_time || '' })) : [])
+      ].sort((a, b) => (a.time || '').localeCompare(b.time || ''))
+
+      if (dayItems.length === 0) return null
+
+      return (
+        <div key={date}>
+          <div style={dateHdr}>{formatDate(date)}</div>
+          {dayItems.map(item => item.type === 'workshop'
+            ? renderWorkshopCard(item.group)
+            : renderMomentCard(item.data, item.type === 'mandatory'))}
+        </div>
+      )
+    }
+
+    const dayNodes = datesToShow.map(renderDay)
+    const isEmpty = dayNodes.every(n => n === null)
+
+    return (
+      <div>
+        {pubAllDates.length > 0 && (
+          <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
+            {['all', ...pubAllDates].map(d => {
+              const active = pubDayFilter === d
+              return (
+                <button key={d} onClick={() => setPubDayFilter(d)} style={{
+                  padding: '5px 14px', borderRadius: 20,
+                  border: '0.5px solid ' + (active ? '#1a1a1a' : '#E8E4DE'),
+                  background: active ? '#1a1a1a' : '#fff',
+                  color: active ? '#fff' : '#8C8C8C',
+                  fontSize: 12, fontWeight: active ? 500 : 400, cursor: 'pointer'
+                }}>
+                  {d === 'all' ? 'All' : new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' })}
+                </button>
+              )
+            })}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 6, marginBottom: 20, flexWrap: 'wrap' }}>
+          {[['all', 'All'], ['workshops', 'Workshops'], ['moments', 'Open Moments']].map(([key, label]) => {
+            const active = pubTypeFilter === key
+            return (
+              <button key={key} onClick={() => setPubTypeFilter(key)} style={{
+                padding: '5px 14px', borderRadius: 20,
+                border: '0.5px solid ' + (active ? '#1a1a1a' : '#E8E4DE'),
+                background: active ? '#1a1a1a' : '#fff',
+                color: active ? '#fff' : '#8C8C8C',
+                fontSize: 12, fontWeight: active ? 500 : 400, cursor: 'pointer'
+              }}>{label}</button>
+            )
+          })}
+        </div>
+
+        {isEmpty ? (
+          <div style={{ textAlign: 'center', color: '#8C8C8C', padding: '48px 0', fontSize: 14 }}>
+            No {pubTypeFilter === 'moments' ? 'open moments' : pubTypeFilter === 'workshops' ? 'workshops' : 'schedule items'} for this selection.
+          </div>
+        ) : dayNodes}
+      </div>
+    )
+  }
+
+  // Guide tab — four collapsible sections (Site / Info / Packing List / Resources),
+  // one open at a time, replacing the standalone Resources tab.
+  // Site tab — map, amenities, and partners for the selected event (same
+  // content the guest Site tab shows).
+  function renderSiteTab() {
+    const eid = selectedEvent?.id
+    const amenityMoments = allMoments.filter(m => m.event_id === eid && m.moment_type === 'amenity')
+    const partnersForEvent = eventPartners.filter(p => p.event_id === eid).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+    return (
+      <div>
+        {selectedEvent?.map_image_url && (
+          <div style={{ marginBottom: 28 }}>
+            <div style={dateHdr}>Site Map</div>
+            <img
+              src={selectedEvent.map_image_url}
+              alt="Event map"
+              onClick={() => setMapFullscreen(true)}
+              style={{ width: '100%', borderRadius: 4, display: 'block', border: '0.5px solid #E8E4DE', cursor: 'zoom-in' }}
+            />
+          </div>
+        )}
+        {amenityMoments.length > 0 && (
+          <div style={{ marginBottom: 28 }}>
+            <div style={dateHdr}>Amenities &amp; Hours</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {amenityMoments.map(m => (
+                <div key={m.id} style={{ background: '#fff', borderRadius: 4, border: '0.5px solid #E8E4DE', padding: '14px 16px' }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: '#1a1a1a' }}>{m.name}</div>
+                  {m.location && <div style={{ fontSize: 12, color: '#8C8C8C', marginTop: 2 }}>{m.location}</div>}
+                  {m.hours_text && <div style={{ fontSize: 12, color: '#8C8C8C', marginTop: 2 }}>{m.hours_text}</div>}
+                  {m.description && <div style={{ fontSize: 12, color: '#8C8C8C', marginTop: 4, lineHeight: 1.5 }}>{m.description}</div>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {partnersForEvent.length > 0 && (
+          <div>
+            <div style={dateHdr}>Partners</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {partnersForEvent.map(p => (
+                <div key={p.id} style={{ background: '#fff', borderRadius: 4, border: '0.5px solid #E8E4DE', padding: '14px 16px' }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: '#1a1a1a' }}>{p.name}</div>
+                  {p.description && <div style={{ fontSize: 12, color: '#8C8C8C', marginTop: 4, lineHeight: 1.5 }}>{p.description}</div>}
+                  {p.website_url && (
+                    <a href={p.website_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12, color: '#2D4A2D', fontWeight: 600, textDecoration: 'none', marginTop: 6, display: 'inline-block' }}>
+                      Visit →
+                    </a>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {!selectedEvent?.map_image_url && amenityMoments.length === 0 && partnersForEvent.length === 0 && (
+          <div style={{ textAlign: 'center', color: '#8C8C8C', padding: '48px 0', fontSize: 14 }}>Nothing to show here yet for this event.</div>
+        )}
+        {mapFullscreen && selectedEvent?.map_image_url && (
+          <div
+            onClick={() => setMapFullscreen(false)}
+            style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.92)', zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, cursor: 'zoom-out' }}
+          >
+            <img src={selectedEvent.map_image_url} alt="Event map" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // Guide tab — checkin/checkout callouts + collapsible info sections (one
+  // open at a time). Partners live on the Site tab, Packing List and
+  // Resources are their own top-level tabs now.
+  function renderGuideTab() {
+    const eid = selectedEvent?.id
+    const infoForEvent = eventInfoSections.filter(s => s.event_id === eid).sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+    return (
+      <div>
+        {(selectedEvent?.checkin_time || selectedEvent?.checkout_time) && (
+          <div style={{ display: 'flex', gap: 10, marginBottom: 20, flexWrap: 'wrap' }}>
+            {selectedEvent?.checkin_time && (
+              <div style={{ flex: '1 1 150px', minWidth: 140, background: '#F5F0E8', border: '0.5px solid #E8E4DE', borderRadius: 6, padding: '16px 18px' }}>
+                <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#8C8C8C', marginBottom: 6 }}>Check-in</div>
+                <div style={{ fontSize: 15, fontWeight: 600, color: '#1a1a1a' }}>{selectedEvent.checkin_time}</div>
+              </div>
+            )}
+            {selectedEvent?.checkout_time && (
+              <div style={{ flex: '1 1 150px', minWidth: 140, background: '#F5F0E8', border: '0.5px solid #E8E4DE', borderRadius: 6, padding: '16px 18px' }}>
+                <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#8C8C8C', marginBottom: 6 }}>Check-out</div>
+                <div style={{ fontSize: 15, fontWeight: 600, color: '#1a1a1a' }}>{selectedEvent.checkout_time}</div>
+              </div>
+            )}
+          </div>
+        )}
+        {infoForEvent.length === 0 ? (
+          <div style={{ textAlign: 'center', color: '#8C8C8C', padding: '48px 0', fontSize: 14 }}>No information available for this event yet.</div>
+        ) : (
+          infoForEvent.map(s => {
+            const open = guideSection === s.id
+            return (
+              <div key={s.id}>
+                <button
+                  onClick={() => setGuideSection(open ? null : s.id)}
+                  style={{
+                    width: '100%', display: 'flex', alignItems: 'center', gap: 10,
+                    padding: '14px 0', background: 'none', border: 'none',
+                    borderBottom: '0.5px solid #E8E4DE', cursor: 'pointer', textAlign: 'left', font: 'inherit'
+                  }}
+                >
+                  <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: '#1a1a1a', letterSpacing: '0.08em', textTransform: 'uppercase' }}>{s.title}</span>
+                  <span style={{ fontSize: 13, color: '#8C8C8C', flexShrink: 0 }}>{open ? '▾' : '▸'}</span>
+                </button>
+                <div style={{ display: 'grid', gridTemplateRows: open ? '1fr' : '0fr', transition: 'grid-template-rows 0.25s ease' }}>
+                  <div style={{ overflow: 'hidden' }}>
+                    <div style={{ padding: '14px 0 18px', fontSize: 14, lineHeight: 1.7, color: '#1a1a1a', whiteSpace: 'pre-wrap' }}>
+                      {s.content}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )
+          })
+        )}
+      </div>
+    )
+  }
+
+  // Packing List tab — read only, no checkboxes; staff-only items flagged.
+  function renderPackingListTab() {
+    const eid = selectedEvent?.id
+    const gearForEvent = gearItems.filter(g => g.event_id === eid)
+    const gearCats = [...new Set(gearForEvent.map(g => g.category))].sort()
+    if (gearForEvent.length === 0) {
+      return <div style={{ textAlign: 'center', color: '#8C8C8C', padding: '48px 0', fontSize: 14 }}>No packing list for this event yet.</div>
+    }
+    return (
+      <div>
+        {gearCats.map(cat => (
+          <div key={cat}>
+            <div style={dateHdr}>{cat}</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 14 }}>
+              {gearForEvent.filter(g => g.category === cat).map(item => (
+                <div key={item.id} style={{ padding: '10px 14px', background: '#fff', border: '0.5px solid #E8E4DE', borderRadius: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <div style={{ fontSize: 14, fontWeight: 500, color: '#1a1a1a' }}>{item.name}</div>
+                    {item.is_staff_only && <span style={badge('#F5F0E8', '#A06000')}>Staff</span>}
+                  </div>
+                  {item.description && <div style={{ fontSize: 12, color: '#8C8C8C', marginTop: 2, lineHeight: 1.4 }}>{item.description}</div>}
+                  {(item.link_1_url || item.link_2_url) && (
+                    <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                      {item.link_1_url && (
+                        <a href={item.link_1_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 10, padding: '4px 10px', borderRadius: 20, border: '0.5px solid #1a1a1a', background: '#fff', color: '#1a1a1a', textDecoration: 'none', fontWeight: 600 }}>
+                          {item.link_1_label || 'Learn more'}
+                        </a>
+                      )}
+                      {item.link_2_url && (
+                        <a href={item.link_2_url} target="_blank" rel="noopener noreferrer" style={{ fontSize: 10, padding: '4px 10px', borderRadius: 20, border: '0.5px solid #1a1a1a', background: '#fff', color: '#1a1a1a', textDecoration: 'none', fontWeight: 600 }}>
+                          {item.link_2_label || 'Learn more'}
+                        </a>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
         ))}
       </div>
     )
@@ -517,112 +864,6 @@ export default function StaffPage() {
     </div>
   )
 
-  // Vendor-limited dashboard (staff table row with is_vendor = true) —
-  // only their own workshop sessions + roster, and Resources. No My
-  // Schedule/All Staff/shifts/guest check-in controls.
-  if (staffMember && staffRole === 'staff' && staffMember.is_vendor) {
-    const vendorSessions = myFilteredAssignments.filter(a => a.sessions)
-    const vendorGrouped = groupByDate(vendorSessions)
-    const vendorDates = Object.keys(vendorGrouped).sort()
-
-    return (
-      <div style={{ fontFamily: 'sans-serif', maxWidth: 720, margin: '0 auto', padding: '24px 16px', color: '#1a1a1a', background: '#FAFAF8', minHeight: '100vh' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 24, flexWrap: 'wrap' }}>
-          <div>
-            <div style={{ fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#8C8C8C', marginBottom: 4 }}>
-              Snow Peak Way &middot; Partner
-            </div>
-            <div style={{ fontSize: 20, fontWeight: 500 }}>{staffMember.vendor_name || staffMember.name}</div>
-          </div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button onClick={() => loadData(staffMember)} style={btn('#fff')}>↻ Refresh</button>
-            <button onClick={signOut} style={btn('#fff')}>Sign out</button>
-          </div>
-        </div>
-
-        {eventsWithAssignments.length > 1 && (
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 20 }}>
-            {eventsWithAssignments.map(ev => (
-              <button key={ev.id} onClick={() => selectEvent(ev)} style={{
-                padding: '6px 16px', borderRadius: 20, fontSize: 13, cursor: 'pointer',
-                fontWeight: selectedEvent?.id === ev.id ? 500 : 400,
-                border: '0.5px solid ' + (selectedEvent?.id === ev.id ? '#1a1a1a' : '#D0CAC4'),
-                background: selectedEvent?.id === ev.id ? '#1a1a1a' : '#fff',
-                color: selectedEvent?.id === ev.id ? '#fff' : '#555'
-              }}>{ev.name}</button>
-            ))}
-          </div>
-        )}
-
-        <div style={{ display: 'flex', borderBottom: '0.5px solid #E0DEDA', marginBottom: 24 }}>
-          {[['sessions', 'My Sessions'], ['resources', 'Resources']].map(([t, label]) => (
-            <button key={t} onClick={() => setActiveTab(t)} style={{
-              padding: '8px 18px', border: 'none', background: 'none', cursor: 'pointer',
-              fontSize: 13, color: activeTab === t ? '#1a1a1a' : '#8C8C8C',
-              borderBottom: activeTab === t ? '2px solid #1a1a1a' : '2px solid transparent',
-              marginBottom: -1, fontWeight: activeTab === t ? 500 : 400
-            }}>{label}</button>
-          ))}
-        </div>
-
-        {activeTab !== 'resources' && (
-          <div>
-            {vendorDates.length === 0 && (
-              <div style={{ textAlign: 'center', color: '#8C8C8C', padding: '48px 0', fontSize: 14 }}>No sessions scheduled.</div>
-            )}
-            {vendorDates.map(date => (
-              <div key={date}>
-                <div style={dateHdr}>{formatDate(date)}</div>
-                {vendorGrouped[date].map(a => {
-                  const info = a._info
-                  const sessionRegs = info.sessionId ? registrations.filter(r => r.session_id === info.sessionId) : []
-                  const totalGuests = sessionRegs.reduce((s, r) => s + (r.party_size || 1), 0)
-                  const isExpanded = expandedRosters[a.id]
-
-                  return (
-                    <div key={a.id} style={{ ...card, borderLeft: '3px solid ' + info.typeColor }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
-                        <div style={{ fontSize: 13, color: '#8C8C8C', fontWeight: 500 }}>{info.time}</div>
-                        <span style={badge(info.typeBg, info.typeColor)}>{info.type}</span>
-                      </div>
-                      <div style={{ fontSize: 15, fontWeight: 500, marginBottom: info.location ? 4 : 0 }}>{info.title}</div>
-                      {info.location && <div style={{ fontSize: 13, color: '#8C8C8C' }}>📍 {info.location}</div>}
-
-                      <div style={{ marginTop: 10, paddingTop: 10, borderTop: '0.5px solid #F0EDE8' }}>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                          <span style={{ fontSize: 13, color: '#555', flexGrow: 1 }}>
-                            {totalGuests}{info.capacity ? ' / ' + info.capacity : ''} registered
-                          </span>
-                          <button onClick={() => setExpandedRosters(r => ({ ...r, [a.id]: !isExpanded }))}
-                            style={{ ...btn('#fff'), fontSize: 12, padding: '4px 12px' }}>
-                            {isExpanded ? 'Hide roster' : 'View roster'}
-                          </button>
-                        </div>
-                        {isExpanded && (
-                          <div style={{ marginTop: 10 }}>
-                            {sessionRegs.length === 0
-                              ? <div style={{ fontSize: 13, color: '#aaa' }}>No registrations yet.</div>
-                              : sessionRegs.map(r => (
-                                <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 10px', background: '#F7F6F4', borderRadius: 8, fontSize: 13, marginBottom: 4 }}>
-                                  <span>{r.guests?.name}</span>
-                                  {r.party_size > 1 && <span style={{ color: '#8C8C8C' }}>party of {r.party_size}</span>}
-                                </div>
-                              ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {activeTab === 'resources' && renderResourcesTab()}
-      </div>
-    )
-  }
 
   if (checkingStoredPin) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', fontFamily: 'sans-serif', background: '#FAFAF8' }} />
@@ -665,15 +906,17 @@ export default function StaffPage() {
     </div>
   )
 
+  const isVendor = !!staffMember.is_vendor
+
   return (
     <div style={{ fontFamily: 'sans-serif', maxWidth: 720, margin: '0 auto', padding: '24px 16px', color: '#1a1a1a', background: '#FAFAF8', minHeight: '100vh' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 24, flexWrap: 'wrap' }}>
         <div>
           <div style={{ fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#8C8C8C', marginBottom: 4 }}>
-            Snow Peak Way &middot; Staff
+            Snow Peak Way &middot; {isVendor ? 'Partner' : 'Staff'}
           </div>
-          <div style={{ fontSize: 20, fontWeight: 500 }}>{staffMember.name}</div>
-          {staffMember.role && <div style={{ fontSize: 13, color: '#8C8C8C', marginTop: 2 }}>{staffMember.role}</div>}
+          <div style={{ fontSize: 20, fontWeight: 500 }}>{isVendor ? (staffMember.vendor_name || staffMember.name) : staffMember.name}</div>
+          {!isVendor && staffMember.role && <div style={{ fontSize: 13, color: '#8C8C8C', marginTop: 2 }}>{staffMember.role}</div>}
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button onClick={() => loadData(staffMember)} style={btn('#fff')}>↻ Refresh</button>
@@ -708,95 +951,48 @@ export default function StaffPage() {
         </div>
       )}
 
-      {/* Sub-tabs: My Schedule / All Staff / Resources */}
-      <div style={{ display: 'flex', borderBottom: '0.5px solid #E0DEDA', marginBottom: 24 }}>
-        {[['schedule', 'My Schedule'], ['all', 'All Staff'], ['resources', 'Resources']].map(([t, label]) => (
+      {/* Sub-tabs: Schedule / My Agenda / Site / Guide / Packing List / Resources — same hierarchy for staff and vendor partners */}
+      <div style={{
+        display: 'flex', overflowX: 'auto', WebkitOverflowScrolling: 'touch',
+        scrollbarWidth: 'none', msOverflowStyle: 'none',
+        borderBottom: '0.5px solid #E0DEDA', marginBottom: 24
+      }}>
+        {[['schedule', 'Schedule'], ['agenda', 'My Agenda'], ['site', 'Site'], ['guide', 'Guide'], ['packing', 'Packing List'], ['resources', 'Resources']].map(([t, label]) => (
           <button key={t} onClick={() => setActiveTab(t)} style={{
-            padding: '8px 18px', border: 'none', background: 'none', cursor: 'pointer',
-            fontSize: 13, color: activeTab === t ? '#1a1a1a' : '#8C8C8C',
+            flex: '0 0 auto',
+            padding: '8px 14px', border: 'none', background: 'none', cursor: 'pointer',
+            fontSize: 13, whiteSpace: 'nowrap', color: activeTab === t ? '#1a1a1a' : '#8C8C8C',
             borderBottom: activeTab === t ? '2px solid #1a1a1a' : '2px solid transparent',
             marginBottom: -1, fontWeight: activeTab === t ? 500 : 400
           }}>{label}</button>
         ))}
       </div>
 
-      {/* MY SCHEDULE */}
-      {activeTab === 'schedule' && (
+      {/* SCHEDULE — read-only public schedule for the selected event */}
+      {activeTab === 'schedule' && renderPublicScheduleTab()}
+
+      {/* MY AGENDA — this staffer's own back-of-house shift coverage only */}
+      {activeTab === 'agenda' && (
         <div>
           {myDates.length === 0 && (
-            <div style={{ textAlign: 'center', color: '#8C8C8C', padding: '48px 0', fontSize: 14 }}>No assignments yet.</div>
+            <div style={{ textAlign: 'center', color: '#8C8C8C', padding: '48px 0', fontSize: 14 }}>No shifts assigned yet.</div>
           )}
           {myDates.map(date => (
             <div key={date}>
               <div style={dateHdr}>{formatDate(date)}</div>
               {myGrouped[date].map(a => {
                 const info = a._info
-                const sessionRegs = info.sessionId ? registrations.filter(r => r.session_id === info.sessionId) : []
-                const totalGuests = sessionRegs.reduce((s, r) => s + (r.party_size || 1), 0)
-                const isExpanded = expandedRosters[a.id]
-                const lookupOpen = activeGuestLookup === a.id
-
                 return (
-                  <div key={a.id} style={{
-                    ...card,
-                    background: info.isStaffOnly ? '#F5F4F1' : '#fff',
-                    borderLeft: '3px solid ' + (info.isStaffOnly ? '#C8C4BC' : info.typeColor)
-                  }}>
+                  <div key={a.id} style={{ ...card, background: '#F5F4F1', borderLeft: '3px solid #C8C4BC' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
                       <div style={{ fontSize: 13, color: '#8C8C8C', fontWeight: 500 }}>{info.time}</div>
-                      <span style={badge(info.isStaffOnly ? '#E8E4DE' : info.typeBg, info.isStaffOnly ? '#888' : info.typeColor)}>
-                        {info.type}
-                      </span>
+                      <span style={badge('#E8E4DE', '#888')}>{info.type}</span>
                     </div>
                     <div style={{ fontSize: 15, fontWeight: 500, marginBottom: info.location ? 4 : 0 }}>{info.title}</div>
                     {info.location && <div style={{ fontSize: 13, color: '#8C8C8C' }}>📍 {info.location}</div>}
-
                     {info.activityNotes && (
                       <div style={{ fontSize: 13, color: '#8C8C8C', marginTop: 8, paddingTop: 8, borderTop: '0.5px solid #F0EDE8', lineHeight: 1.55, fontStyle: 'italic' }}>
                         {info.activityNotes}
-                      </div>
-                    )}
-
-                    {/* Workshop: roster + guest lookup */}
-                    {info.sessionId && (
-                      <div style={{ marginTop: 10, paddingTop: 10, borderTop: '0.5px solid #F0EDE8' }}>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                          <span style={{ fontSize: 13, color: '#555', flexGrow: 1 }}>
-                            {totalGuests}{info.capacity ? ' / ' + info.capacity : ''} registered
-                          </span>
-                          <button onClick={() => setExpandedRosters(r => ({ ...r, [a.id]: !isExpanded }))}
-                            style={{ ...btn('#fff'), fontSize: 12, padding: '4px 12px' }}>
-                            {isExpanded ? 'Hide roster' : 'View roster'}
-                          </button>
-                          <button onClick={() => toggleLookup(a.id)}
-                            style={{ ...btn(lookupOpen ? '#1a1a1a' : '#fff', lookupOpen ? '#fff' : '#1a1a1a'), fontSize: 12, padding: '4px 12px' }}>
-                            Guest Lookup
-                          </button>
-                        </div>
-                        {isExpanded && (
-                          <div style={{ marginTop: 10 }}>
-                            {sessionRegs.length === 0
-                              ? <div style={{ fontSize: 13, color: '#aaa' }}>No registrations yet.</div>
-                              : sessionRegs.map(r => (
-                                <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 10px', background: '#F7F6F4', borderRadius: 8, fontSize: 13, marginBottom: 4 }}>
-                                  <span>{r.guests?.name}</span>
-                                  {r.party_size > 1 && <span style={{ color: '#8C8C8C' }}>party of {r.party_size}</span>}
-                                </div>
-                              ))}
-                          </div>
-                        )}
-                        {renderGuestLookup(a.id)}
-                      </div>
-                    )}
-
-                    {/* Open moment: guest lookup only */}
-                    {info.momentId && (
-                      <div style={{ marginTop: 10, paddingTop: 10, borderTop: '0.5px solid #F0EDE8' }}>
-                        <button onClick={() => toggleLookup(a.id)}
-                          style={{ ...btn(lookupOpen ? '#1a1a1a' : '#fff', lookupOpen ? '#fff' : '#1a1a1a'), fontSize: 12, padding: '4px 12px' }}>
-                          Guest Lookup
-                        </button>
-                        {renderGuestLookup(a.id)}
                       </div>
                     )}
                   </div>
@@ -807,51 +1003,16 @@ export default function StaffPage() {
         </div>
       )}
 
-      {/* ALL STAFF */}
-      {activeTab === 'all' && (
-        <div>
-          {allDates.length === 0 && (
-            <div style={{ textAlign: 'center', color: '#8C8C8C', padding: '48px 0', fontSize: 14 }}>No schedule items for this event.</div>
-          )}
+      {/* SITE */}
+      {activeTab === 'site' && renderSiteTab()}
 
-          {allDates.map(date => (
-            <div key={date}>
-              <div style={dateHdr}>{formatDate(date)}</div>
-              {allByDate[date]
-                .sort((a, b) => (a.start || '').localeCompare(b.start || ''))
-                .map(item => (
-                  <div key={item.key} style={{
-                    ...card,
-                    background: item.isStaffOnly ? '#F5F4F1' : '#fff',
-                    borderLeft: '3px solid ' + (item.isStaffOnly ? '#C8C4BC' : item.typeColor)
-                  }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
-                      <div style={{ fontSize: 13, color: '#8C8C8C' }}>{item.time}</div>
-                      <span style={badge(item.isStaffOnly ? '#E8E4DE' : item.typeBg, item.isStaffOnly ? '#888' : item.typeColor)}>
-                        {item.type}
-                      </span>
-                    </div>
-                    <div style={{ fontSize: 15, fontWeight: 500, marginBottom: item.location ? 4 : 6 }}>{item.title}</div>
-                    {item.location && <div style={{ fontSize: 13, color: '#8C8C8C', marginBottom: 8 }}>📍 {item.location}</div>}
-                    {item.staff.length === 0 ? (
-                      <span style={{ fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 20, background: '#FFF8E8', color: '#A06000', border: '0.5px solid #F0D880' }}>
-                        Unassigned
-                      </span>
-                    ) : (
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-                        {item.staff.map((name, i) => (
-                          <span key={i} style={{ padding: '3px 10px', borderRadius: 20, fontSize: 12, background: '#F0EDE8', color: '#555' }}>{name}</span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
-            </div>
-          ))}
-        </div>
-      )}
+      {/* GUIDE */}
+      {activeTab === 'guide' && renderGuideTab()}
 
-      {/* RESOURCES — category list, each tapping through to its own page */}
+      {/* PACKING LIST */}
+      {activeTab === 'packing' && renderPackingListTab()}
+
+      {/* RESOURCES — distinct top-level tab; categories flagged hidden_from_vendors are excluded for partners */}
       {activeTab === 'resources' && renderResourcesTab()}
     </div>
   )

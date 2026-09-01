@@ -136,6 +136,10 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
   const [newEvent, setNewEvent] = useState({ name: '', description: '', location: '', start_date: '', end_date: '', registration_opens_at: '' })
   const [eventMsg, setEventMsg] = useState(null)
   const [addingEvent, setAddingEvent] = useState(false)
+  const [newEventCopySource, setNewEventCopySource] = useState('')
+  const [newEventCopyCategories, setNewEventCopyCategories] = useState({
+    workshops: false, moments: false, gear: false, info: false, partners: false, resources: false
+  })
   const [archivedEventsOpen, setArchivedEventsOpen] = useState(false)
 
   const [settingsMsg, setSettingsMsg] = useState(null)
@@ -146,7 +150,7 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
   const [gearItems, setGearItems] = useState([])
   const [gearCategories, setGearCategories] = useState([]) // { event_id, name, sort_order } — controls gear list section order
   const [reorderingGearCat, setReorderingGearCat] = useState(null)
-  const [newGearItem, setNewGearItem] = useState({ name: '', category: '', description: '', link_1_label: '', link_1_url: '', link_2_label: '', link_2_url: '', is_available_to_rent: false, sort_order: 0 })
+  const [newGearItem, setNewGearItem] = useState({ name: '', category: '', description: '', link_1_label: '', link_1_url: '', link_2_label: '', link_2_url: '', is_available_to_rent: false, is_staff_only: false, sort_order: 0 })
   const [gearMsg, setGearMsg] = useState(null)
   const [addingGear, setAddingGear] = useState(false)
   const [editingGearItem, setEditingGearItem] = useState(null)
@@ -201,6 +205,7 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
 
   const [staffMembers, setStaffMembers] = useState([])
   const [staffEventAssns, setStaffEventAssns] = useState([])
+  const [staffWorkshopAssns, setStaffWorkshopAssns] = useState([])
   const [newStaffMember, setNewStaffMember] = useState({ name: '', pin: '', email: '', phone: '', notes: '', is_vendor: false, vendor_name: '' })
   const [staffMemberMsg, setStaffMemberMsg] = useState(null)
   const [addingStaffMember, setAddingStaffMember] = useState(false)
@@ -211,7 +216,7 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
   const [savingStaffMember, setSavingStaffMember] = useState(false)
 
   const [staffResources, setStaffResources] = useState([])
-  const [newStaffResource, setNewStaffResource] = useState({ title: '', category: '', description: '', image_url: '', is_global: false, sort_order: 0 })
+  const [newStaffResource, setNewStaffResource] = useState({ title: '', category: '', description: '', image_url: '', is_global: false, hidden_from_vendors: false, sort_order: 0 })
   const [staffResourceMsg, setStaffResourceMsg] = useState(null)
   const [addingStaffResource, setAddingStaffResource] = useState(false)
   const [editingStaffResource, setEditingStaffResource] = useState(null)
@@ -279,7 +284,7 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
       { data: s }, { data: r }, { data: e },
       { data: ge }, { data: om }, { data: gi }, { data: gc },
       { data: sa }, { data: sm }, { data: sea }, { data: is }, { data: sr },
-      { data: ep }
+      { data: ep }, { data: swa }
     ] = await Promise.all([
       supabase.from('guests').select('*, ticket_types(*)').order('name'),
       supabase.from('ticket_types').select('*').order('name'),
@@ -296,7 +301,8 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
       supabase.from('staff_event_assignments').select('*, events(id, name)'),
       supabase.from('event_info_sections').select('*').order('sort_order'),
       supabase.from('staff_resources').select('*').order('sort_order'),
-      supabase.from('event_partners').select('*').order('sort_order')
+      supabase.from('event_partners').select('*').order('sort_order'),
+      supabase.from('staff_workshop_assignments').select('*, staff(id, name), workshops(id, name)')
     ])
     const { data: ss, error: ssError } = await supabase.from('staff_shifts').select('*').order('shift_date').order('start_time')
     console.log('[loadAll] staff_shifts result:', ss, 'error:', ssError)
@@ -317,6 +323,7 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
     setStaffAssignments(sa || [])
     setStaffMembers(sm || [])
     setStaffEventAssns(sea || [])
+    setStaffWorkshopAssns(swa || [])
     if (e && e.length > 0 && !selectedEvent) {
       const activeEvents = e.filter(ev => !ev.is_archived)
       const upcoming = activeEvents.find(ev => !isPastEvent(ev) && (ev.status === 'upcoming' || ev.status === 'active'))
@@ -755,11 +762,12 @@ const filteredGuests = guests.filter(g => {
       link_2_label: newGearItem.link_2_label || null,
       link_2_url: newGearItem.link_2_url || null,
       is_available_to_rent: newGearItem.is_available_to_rent,
+      is_staff_only: newGearItem.is_staff_only,
       sort_order: parseInt(newGearItem.sort_order) || 0
     })
     if (!error) {
       setGearMsg({ type: 'success', text: 'Item added.' })
-      setNewGearItem({ name: '', category: '', description: '', link_1_label: '', link_1_url: '', link_2_label: '', link_2_url: '', is_available_to_rent: false, sort_order: 0 })
+      setNewGearItem({ name: '', category: '', description: '', link_1_label: '', link_1_url: '', link_2_label: '', link_2_url: '', is_available_to_rent: false, is_staff_only: false, sort_order: 0 })
       await loadAll()
     } else {
       setGearMsg({ type: 'error', text: 'Could not add item.' })
@@ -788,6 +796,7 @@ const filteredGuests = guests.filter(g => {
       link_2_label: editGearData.link_2_label || null,
       link_2_url: editGearData.link_2_url || null,
       is_available_to_rent: editGearData.is_available_to_rent,
+      is_staff_only: editGearData.is_staff_only,
       sort_order: parseInt(editGearData.sort_order) || 0
     }).eq('id', editingGearItem.id)
     if (!error) {
@@ -988,11 +997,12 @@ const filteredGuests = guests.filter(g => {
       description: newStaffResource.description || null,
       image_url: newStaffResource.image_url || null,
       is_global: newStaffResource.is_global,
+      hidden_from_vendors: newStaffResource.hidden_from_vendors,
       sort_order: parseInt(newStaffResource.sort_order) || 0
     })
     if (!error) {
       setStaffResourceMsg({ type: 'success', text: 'Resource added.' })
-      setNewStaffResource({ title: '', category: '', description: '', image_url: '', is_global: false, sort_order: 0 })
+      setNewStaffResource({ title: '', category: '', description: '', image_url: '', is_global: false, hidden_from_vendors: false, sort_order: 0 })
       await loadAll()
     } else {
       setStaffResourceMsg({ type: 'error', text: 'Could not add resource.' })
@@ -1016,6 +1026,7 @@ const filteredGuests = guests.filter(g => {
       description: editStaffResourceData.description || null,
       image_url: editStaffResourceData.image_url || null,
       is_global: editStaffResourceData.is_global,
+      hidden_from_vendors: editStaffResourceData.hidden_from_vendors,
       sort_order: parseInt(editStaffResourceData.sort_order) || 0
     }).eq('id', editingStaffResource.id)
     if (!error) {
@@ -1090,15 +1101,147 @@ const filteredGuests = guests.filter(g => {
     await loadAll()
   }
 
+  // Copies selected data categories from an existing event onto a freshly
+  // created (empty) one. Workshops are duplicated as new rows (not
+  // re-pointed at the source event's workshop_id) so later edits on one
+  // event's copy never bleed into the other's.
+  async function copyEventDataToEvent(sourceEventId, targetEventId, categories, dayOffset = 0) {
+    const tasks = []
+    // Shifts a date by the gap between the source and target events' start
+    // dates, so a workshop that ran on "Saturday of the old event" lands on
+    // "Saturday of the new event" instead of keeping its literal old date.
+    const shiftDate = dateStr => {
+      if (!dateStr || !dayOffset) return dateStr
+      const d = new Date(dateStr + 'T12:00:00')
+      d.setDate(d.getDate() + dayOffset)
+      return d.toISOString().slice(0, 10)
+    }
+
+    if (categories.workshops) {
+      tasks.push((async () => {
+        const byWorkshop = {}
+        sessions.filter(s => s.event_id === sourceEventId).forEach(s => {
+          if (!byWorkshop[s.workshop_id]) byWorkshop[s.workshop_id] = { workshop: s.workshops, rows: [] }
+          byWorkshop[s.workshop_id].rows.push(s)
+        })
+        for (const { workshop, rows } of Object.values(byWorkshop)) {
+          if (!workshop) continue
+          const { data: newWorkshop, error: wErr } = await supabase.from('workshops').insert({
+            name: workshop.name,
+            category: workshop.category,
+            instructor: workshop.instructor,
+            location: workshop.location,
+            description: workshop.description,
+            max_per_guest: workshop.max_per_guest,
+            is_paid: workshop.is_paid,
+            price: workshop.price
+          }).select().single()
+          if (wErr || !newWorkshop) continue
+          await supabase.from('sessions').insert(rows.map(s => ({
+            event_id: targetEventId,
+            workshop_id: newWorkshop.id,
+            date: shiftDate(s.date),
+            start_time: s.start_time,
+            end_time: s.end_time,
+            capacity: s.capacity
+          })))
+        }
+      })())
+    }
+
+    if (categories.moments) {
+      const rows = openMoments.filter(m => m.event_id === sourceEventId)
+      if (rows.length > 0) {
+        tasks.push(supabase.from('open_moments').insert(rows.map(m => ({
+          event_id: targetEventId,
+          name: m.name,
+          description: m.description,
+          location: m.location,
+          date: shiftDate(m.date),
+          start_time: m.start_time,
+          end_time: m.end_time,
+          hours_text: m.hours_text,
+          moment_type: m.moment_type
+        }))))
+      }
+    }
+
+    if (categories.gear) {
+      const gearRows = gearItems.filter(g => g.event_id === sourceEventId)
+      if (gearRows.length > 0) {
+        tasks.push(supabase.from('gear_items').insert(gearRows.map(g => ({
+          event_id: targetEventId,
+          name: g.name,
+          category: g.category,
+          description: g.description,
+          link_1_label: g.link_1_label,
+          link_1_url: g.link_1_url,
+          link_2_label: g.link_2_label,
+          link_2_url: g.link_2_url,
+          is_available_to_rent: g.is_available_to_rent,
+          is_staff_only: g.is_staff_only,
+          sort_order: g.sort_order
+        }))))
+      }
+      const catRows = gearCategories.filter(c => c.event_id === sourceEventId)
+      if (catRows.length > 0) {
+        tasks.push(supabase.from('gear_categories').insert(catRows.map(c => ({
+          event_id: targetEventId, name: c.name, sort_order: c.sort_order
+        }))))
+      }
+    }
+
+    if (categories.info) {
+      const rows = infoSections.filter(s => s.event_id === sourceEventId)
+      if (rows.length > 0) {
+        tasks.push(supabase.from('event_info_sections').insert(rows.map(s => ({
+          event_id: targetEventId, title: s.title, content: s.content, icon: s.icon, sort_order: s.sort_order
+        }))))
+      }
+    }
+
+    if (categories.partners) {
+      const rows = partners.filter(p => p.event_id === sourceEventId)
+      if (rows.length > 0) {
+        tasks.push(supabase.from('event_partners').insert(rows.map(p => ({
+          event_id: targetEventId, name: p.name, description: p.description, website_url: p.website_url, logo_url: p.logo_url, sort_order: p.sort_order
+        }))))
+      }
+    }
+
+    if (categories.resources) {
+      // Global resources already show on every event — copying them would
+      // just duplicate what's already visible.
+      const rows = staffResources.filter(r => r.event_id === sourceEventId && !r.is_global)
+      if (rows.length > 0) {
+        tasks.push(supabase.from('staff_resources').insert(rows.map(r => ({
+          event_id: targetEventId, title: r.title, category: r.category, description: r.description,
+          image_url: r.image_url, is_global: false, hidden_from_vendors: r.hidden_from_vendors, sort_order: r.sort_order
+        }))))
+      }
+    }
+
+    await Promise.all(tasks)
+  }
+
   async function addEvent() {
     if (!newEvent.name || !newEvent.start_date || !newEvent.end_date) {
       setEventMsg({ type: 'error', text: 'Name and dates required.' }); return
     }
     setAddingEvent(true)
-    const { error } = await supabase.from('events').insert({ ...newEvent, status: 'upcoming' })
-    if (!error) {
+    const { data: created, error } = await supabase.from('events').insert({ ...newEvent, status: 'upcoming' }).select().single()
+    if (!error && created) {
+      if (newEventCopySource && Object.values(newEventCopyCategories).some(Boolean)) {
+        const sourceEvent = events.find(e => e.id === newEventCopySource)
+        const dayOffset = sourceEvent?.start_date && created.start_date
+          ? Math.round((new Date(created.start_date + 'T12:00:00') - new Date(sourceEvent.start_date + 'T12:00:00')) / 86400000)
+          : 0
+        await copyEventDataToEvent(newEventCopySource, created.id, newEventCopyCategories, dayOffset)
+      }
       setEventMsg({ type: 'success', text: 'Event created.' })
       setNewEvent({ name: '', description: '', location: '', start_date: '', end_date: '', registration_opens_at: '' })
+      setNewEventCopySource('')
+      setNewEventCopyCategories({ workshops: false, moments: false, gear: false, info: false, partners: false, resources: false })
       await loadAll()
     } else setEventMsg({ type: 'error', text: 'Could not create event.' })
     setAddingEvent(false)
@@ -1266,6 +1409,9 @@ const filteredGuests = guests.filter(g => {
 
   async function deleteStaffMember(id, name) {
     if ((staffDeleteInput[id] || '') !== name) return
+    // Clear join-table rows first — staff_workshop_assignments has a FK on
+    // staff_id with no cascade, so deleting the staff row first would fail.
+    await supabase.from('staff_workshop_assignments').delete().eq('staff_id', id)
     await supabase.from('staff').delete().eq('id', id)
     setStaffDeleteInput(d => { const n = { ...d }; delete n[id]; return n })
     await loadAll()
@@ -1279,6 +1425,17 @@ const filteredGuests = guests.filter(g => {
 
   async function removeStaffEventAssn(id) {
     await supabase.from('staff_event_assignments').delete().eq('id', id)
+    await loadAll()
+  }
+
+  async function addStaffWorkshopAssn(staffId, workshopId) {
+    if (!workshopId) return
+    await supabase.from('staff_workshop_assignments').insert({ staff_id: staffId, workshop_id: workshopId })
+    await loadAll()
+  }
+
+  async function removeStaffWorkshopAssn(id) {
+    await supabase.from('staff_workshop_assignments').delete().eq('id', id)
     await loadAll()
   }
 
@@ -2306,10 +2463,14 @@ const filteredGuests = guests.filter(g => {
                 <input type="text" value={newGearItem.link_2_url} onChange={e => setNewGearItem(g => ({ ...g, link_2_url: e.target.value }))} placeholder="https://... (optional)" style={inp} />
               </div>
             </div>
-            <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginBottom: 14 }}>
+            <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, cursor: 'pointer' }}>
                 <input type="checkbox" checked={newGearItem.is_available_to_rent} onChange={e => setNewGearItem(g => ({ ...g, is_available_to_rent: e.target.checked }))} style={{ cursor: 'pointer' }} />
                 Available to rent
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, cursor: 'pointer' }}>
+                <input type="checkbox" checked={newGearItem.is_staff_only} onChange={e => setNewGearItem(g => ({ ...g, is_staff_only: e.target.checked }))} style={{ cursor: 'pointer' }} />
+                Staff only
               </label>
               <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                 <label style={lbl} htmlFor="gear-sort">Sort order</label>
@@ -2425,10 +2586,14 @@ const filteredGuests = guests.filter(g => {
                             <input type="text" value={editGearData.link_2_url || ''} onChange={e => setEditGearData(d => ({ ...d, link_2_url: e.target.value }))} placeholder="https://... (optional)" style={inp} />
                           </div>
                         </div>
-                        <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginBottom: 12 }}>
+                        <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
                           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
                             <input type="checkbox" checked={!!editGearData.is_available_to_rent} onChange={e => setEditGearData(d => ({ ...d, is_available_to_rent: e.target.checked }))} style={{ cursor: 'pointer' }} />
                             Available to rent
+                          </label>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+                            <input type="checkbox" checked={!!editGearData.is_staff_only} onChange={e => setEditGearData(d => ({ ...d, is_staff_only: e.target.checked }))} style={{ cursor: 'pointer' }} />
+                            Staff only
                           </label>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                             <label style={{ ...lbl, marginBottom: 0 }}>Sort</label>
@@ -2446,6 +2611,7 @@ const filteredGuests = guests.filter(g => {
                           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 2 }}>
                             <div style={{ fontSize: 14, fontWeight: 500 }}>{gi.name}</div>
                             {gi.is_available_to_rent && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, background: '#fff8ec', color: '#9a5a18', border: '0.5px solid #e8c080' }}>Rentable</span>}
+                            {gi.is_staff_only && <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', padding: '2px 7px', borderRadius: 10, background: '#F5F0E8', color: '#A06000', border: '0.5px solid #E8C080' }}>Staff Only</span>}
                           </div>
                           {gi.description && <div style={{ fontSize: 12, color: '#aaa' }}>{gi.description}</div>}
                           {(gi.link_1_url || gi.link_2_url) && (
@@ -2456,7 +2622,7 @@ const filteredGuests = guests.filter(g => {
                           )}
                         </div>
                         <div style={{ display: 'flex', gap: 6, flexShrink: 0, flexWrap: 'wrap' }}>
-                          <button onClick={() => { setEditingGearItem(gi); setEditGearData({ name: gi.name, category: gi.category, description: gi.description || '', link_1_label: gi.link_1_label || '', link_1_url: gi.link_1_url || '', link_2_label: gi.link_2_label || '', link_2_url: gi.link_2_url || '', is_available_to_rent: gi.is_available_to_rent, sort_order: gi.sort_order }); setGearMsg(null) }} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px' }}>Edit</button>
+                          <button onClick={() => { setEditingGearItem(gi); setEditGearData({ name: gi.name, category: gi.category, description: gi.description || '', link_1_label: gi.link_1_label || '', link_1_url: gi.link_1_url || '', link_2_label: gi.link_2_label || '', link_2_url: gi.link_2_url || '', is_available_to_rent: gi.is_available_to_rent, is_staff_only: gi.is_staff_only, sort_order: gi.sort_order }); setGearMsg(null) }} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px' }}>Edit</button>
                           {!deleteConfirm['gear_' + gi.id] ? (
                             <button onClick={() => deleteGearItem(gi.id)} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px', color: '#c0392b', borderColor: '#f5c0c0' }}>Delete</button>
                           ) : (
@@ -2802,6 +2968,40 @@ const filteredGuests = guests.filter(g => {
               <label style={lbl}>Registration opens (date & time)</label>
               <input type="datetime-local" value={newEvent.registration_opens_at} onChange={e => setNewEvent(ev => ({ ...ev, registration_opens_at: e.target.value }))} style={inp} />
             </div>
+
+            <div style={fw}>
+              <label style={lbl}>Copy data from an existing event (optional)</label>
+              <select value={newEventCopySource} onChange={e => setNewEventCopySource(e.target.value)} style={inp}>
+                <option value="">None — start blank</option>
+                {events.map(ev => <option key={ev.id} value={ev.id}>{ev.name}</option>)}
+              </select>
+            </div>
+            {newEventCopySource && (
+              <div style={{ marginBottom: 14, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ fontSize: 11, color: '#aaa', marginBottom: 2 }}>
+                  Dates shift to match this event's start date — e.g. a Saturday workshop lands on this event's Saturday.
+                </div>
+                {[
+                  ['workshops', 'Workshops & sessions'],
+                  ['moments', 'Open moments'],
+                  ['gear', 'Gear / packing list'],
+                  ['info', 'Info sections'],
+                  ['partners', 'Partners'],
+                  ['resources', 'Staff resources']
+                ].map(([key, label]) => (
+                  <label key={key} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={newEventCopyCategories[key]}
+                      onChange={e => setNewEventCopyCategories(c => ({ ...c, [key]: e.target.checked }))}
+                      style={{ cursor: 'pointer' }}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            )}
+
             <button onClick={addEvent} disabled={addingEvent} style={{ ...btn('#1a1a1a', '#fff'), width: '100%', padding: '10px' }}>
               {addingEvent ? 'Creating...' : 'Create event'}
             </button>
@@ -3017,11 +3217,19 @@ const filteredGuests = guests.filter(g => {
                   shift: { label: 'Back of House', bg: '#EFEDEA', color: '#666' },
                 }
 
-                const isItemUnassigned = i => eventStaffAssignments.filter(a => a.staff_id && (
-                  i.type === 'session' ? a.session_id === i.id :
-                  i.type === 'moment' ? a.moment_id === i.id :
-                  a.shift_id === i.id
-                )).length === 0
+                const isItemUnassigned = i => {
+                  const hasDirect = eventStaffAssignments.some(a => a.staff_id && (
+                    i.type === 'session' ? a.session_id === i.id :
+                    i.type === 'moment' ? a.moment_id === i.id :
+                    a.shift_id === i.id
+                  ))
+                  if (hasDirect) return false
+                  // Workshop-wide vendor coverage counts as assigned too.
+                  if (i.type === 'session' && i.workshopId) {
+                    return !staffWorkshopAssns.some(a => a.workshop_id === i.workshopId)
+                  }
+                  return true
+                }
 
                 const renderItemCard = item => {
                   const itemKey = item.type + '_' + item.id
@@ -3031,6 +3239,12 @@ const filteredGuests = guests.filter(g => {
                     a.shift_id === item.id
                   ))
                   const assignedIds = new Set(assigned.map(a => a.staff_id))
+                  // Vendors auto-assigned to every session of this workshop via
+                  // staff_workshop_assignments — shown as a distinct badge, not a
+                  // manually-assignable pill (no staff_assignments row backs these).
+                  const workshopVendors = item.type === 'session' && item.workshopId
+                    ? staffWorkshopAssns.filter(a => a.workshop_id === item.workshopId)
+                    : []
                   const isDropdownOpen = openAssignDropdown === itemKey
                   const isShowAll = showAllStaff[itemKey] || false
                   const allActiveStaff = staffMembers.filter(sm => sm.is_active !== false)
@@ -3106,15 +3320,25 @@ const filteredGuests = guests.filter(g => {
                           else await supabase.from('staff_shifts').update({ description: val || null }).eq('id', item.id)
                         }}
                         rows={2}
-                        style={{ width: '100%', fontSize: 12, padding: '7px 10px', borderRadius: 6, border: '0.5px solid #e0e0e0', resize: 'none', fontStyle: 'italic', color: '#666', boxSizing: 'border-box', marginBottom: assigned.length > 0 || isDropdownOpen ? 8 : 0, fontFamily: 'inherit', background: '#FAFAF8' }}
+                        style={{ width: '100%', fontSize: 12, padding: '7px 10px', borderRadius: 6, border: '0.5px solid #e0e0e0', resize: 'none', fontStyle: 'italic', color: '#666', boxSizing: 'border-box', marginBottom: assigned.length > 0 || workshopVendors.length > 0 || isDropdownOpen ? 8 : 0, fontFamily: 'inherit', background: '#FAFAF8' }}
                       />
                       {assigned.length > 0 && (
-                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: isDropdownOpen ? 8 : 0 }}>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: workshopVendors.length > 0 || isDropdownOpen ? 8 : 0 }}>
                           {assigned.map(a => (
                             <span key={a.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 10px', borderRadius: 20, background: '#EEF3EE', color: '#2D4A2D', fontSize: 12, fontWeight: 500 }}>
                               {a.staff?.name}
                               <button type="button" onClick={() => { setStaffAssignments(prev => prev.filter(a2 => a2.id !== a.id)); removeStaffAssignment(a.id) }}
                                 style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#2D4A2D', padding: 0, fontSize: 14, lineHeight: 1 }}>×</button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {workshopVendors.length > 0 && (
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: isDropdownOpen ? 8 : 0 }}>
+                          {workshopVendors.map(a => (
+                            <span key={'wv_' + a.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '4px 10px', borderRadius: 20, background: '#FFF8E8', color: '#9a5a18', border: '0.5px solid #E8C080', fontSize: 12, fontWeight: 500 }}>
+                              {a.staff?.name}
+                              <span style={{ fontSize: 9, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', opacity: 0.8 }}>Workshop</span>
                             </span>
                           ))}
                         </div>
@@ -3188,7 +3412,7 @@ const filteredGuests = guests.filter(g => {
                 }
 
                 const allItems = [
-                  ...eventSessions.map(s => ({ type: 'session', id: s.id, date: s.date, start_time: s.start_time, end_time: s.end_time, title: s.workshops?.name || 'Workshop', location: s.workshops?.location, notes: s.staff_notes })),
+                  ...eventSessions.map(s => ({ type: 'session', id: s.id, date: s.date, start_time: s.start_time, end_time: s.end_time, title: s.workshops?.name || 'Workshop', location: s.workshops?.location, notes: s.staff_notes, workshopId: s.workshop_id })),
                   ...eventMoments.map(m => ({ type: 'moment', id: m.id, date: m.date, start_time: m.start_time, end_time: m.end_time, title: m.name, location: m.location, notes: m.staff_notes })),
                   ...eventShifts.map(s => ({ type: 'shift', id: s.id, date: s.shift_date, start_time: s.start_time, end_time: s.end_time, title: s.title, location: s.location, notes: s.description })),
                 ].sort((a, b) => (a.date + 'T' + a.start_time) < (b.date + 'T' + b.start_time) ? -1 : 1)
@@ -3276,6 +3500,7 @@ const filteredGuests = guests.filter(g => {
               {staffMembers.length === 0 && <div style={{ fontSize: 13, color: '#aaa', marginBottom: 28 }}>No staff members yet.</div>}
               {staffMembers.map(sm => {
                 const memberEventAssns = staffEventAssns.filter(a => a.staff_id === sm.id)
+                const memberWorkshopAssns = staffWorkshopAssns.filter(a => a.staff_id === sm.id)
                 const isDeleting = staffDeleteInput[sm.id] !== undefined
                 const isEditingThis = editingStaffMember?.id === sm.id
                 return (
@@ -3362,6 +3587,27 @@ const filteredGuests = guests.filter(g => {
                       </select>
                     </div>
                     )}
+                    {!isEditingThis && sm.is_vendor && (
+                    <div style={{ marginTop: 10, paddingTop: 10, borderTop: '0.5px solid #F0EDE8' }}>
+                      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#aaa', marginBottom: 6 }}>Assigned Workshops</div>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                        {memberWorkshopAssns.length === 0 && <span style={{ fontSize: 12, color: '#aaa' }}>No workshops</span>}
+                        {memberWorkshopAssns.map(a => (
+                          <span key={a.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 8px', borderRadius: 20, background: '#EEF3EE', color: '#2D4A2D', fontSize: 12 }}>
+                            {a.workshops?.name}
+                            <button onClick={() => removeStaffWorkshopAssn(a.id)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#2D4A2D', padding: 0, fontSize: 13, lineHeight: 1 }}>×</button>
+                          </span>
+                        ))}
+                        <select value="" onChange={e => e.target.value && addStaffWorkshopAssn(sm.id, e.target.value)}
+                          style={{ fontSize: 11, padding: '3px 8px', borderRadius: 6, border: '0.5px solid #d0d0d0', color: '#666', background: '#fff', cursor: 'pointer' }}>
+                          <option value="">+ Add workshop</option>
+                          {workshops.filter(w => !memberWorkshopAssns.some(a => a.workshop_id === w.id)).map(w => (
+                            <option key={w.id} value={w.id}>{w.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                    )}
                   </div>
                 )
               })}
@@ -3402,10 +3648,14 @@ const filteredGuests = guests.filter(g => {
                     <img src={newStaffResource.image_url} alt="Preview" style={{ marginTop: 8, maxWidth: 220, maxHeight: 140, borderRadius: 4, objectFit: 'cover', border: '0.5px solid #E8E4DE' }} />
                   )}
                 </div>
-                <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginBottom: 14 }}>
+                <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' }}>
                   <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, cursor: 'pointer' }}>
                     <input type="checkbox" checked={newStaffResource.is_global} onChange={e => setNewStaffResource(r => ({ ...r, is_global: e.target.checked }))} style={{ cursor: 'pointer' }} />
                     Global (visible for all events)
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, cursor: 'pointer' }}>
+                    <input type="checkbox" checked={newStaffResource.hidden_from_vendors} onChange={e => setNewStaffResource(r => ({ ...r, hidden_from_vendors: e.target.checked }))} style={{ cursor: 'pointer' }} />
+                    Hidden from vendors
                   </label>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                     <label style={lbl} htmlFor="resource-sort">Sort order</label>
@@ -3474,10 +3724,14 @@ const filteredGuests = guests.filter(g => {
                                   <img src={editStaffResourceData.image_url} alt="Preview" style={{ marginTop: 8, maxWidth: 220, maxHeight: 140, borderRadius: 4, objectFit: 'cover', border: '0.5px solid #E8E4DE' }} />
                                 )}
                               </div>
-                              <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginBottom: 12 }}>
+                              <div style={{ display: 'flex', gap: 16, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
                                 <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
                                   <input type="checkbox" checked={!!editStaffResourceData.is_global} onChange={e => setEditStaffResourceData(d => ({ ...d, is_global: e.target.checked }))} style={{ cursor: 'pointer' }} />
                                   Global
+                                </label>
+                                <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+                                  <input type="checkbox" checked={!!editStaffResourceData.hidden_from_vendors} onChange={e => setEditStaffResourceData(d => ({ ...d, hidden_from_vendors: e.target.checked }))} style={{ cursor: 'pointer' }} />
+                                  Hidden from vendors
                                 </label>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                                   <label style={{ ...lbl, marginBottom: 0 }}>Sort</label>
@@ -3499,12 +3753,13 @@ const filteredGuests = guests.filter(g => {
                                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 2 }}>
                                     <div style={{ fontSize: 14, fontWeight: 500 }}>{res.title}</div>
                                     {res.is_global && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, background: '#EEF3EE', color: '#2D4A2D', border: '0.5px solid #C0D4C0' }}>Global</span>}
+                                    {res.hidden_from_vendors && <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', padding: '2px 7px', borderRadius: 10, background: '#F5F0E8', color: '#A06000', border: '0.5px solid #E8C080' }}>Hidden from vendors</span>}
                                   </div>
                                   {res.description && <div style={{ fontSize: 12, color: '#aaa' }}>{res.description}</div>}
                                 </div>
                               </div>
                               <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center', flexWrap: 'wrap' }}>
-                                <button onClick={() => { setEditingStaffResource(res); setEditStaffResourceData({ title: res.title, category: res.category || '', description: res.description || '', image_url: res.image_url || '', is_global: res.is_global, sort_order: res.sort_order }); setStaffResourceMsg(null) }} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px' }}>Edit</button>
+                                <button onClick={() => { setEditingStaffResource(res); setEditStaffResourceData({ title: res.title, category: res.category || '', description: res.description || '', image_url: res.image_url || '', is_global: res.is_global, hidden_from_vendors: res.hidden_from_vendors, sort_order: res.sort_order }); setStaffResourceMsg(null) }} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px' }}>Edit</button>
                                 {!isDeleting ? (
                                   <button onClick={() => setResourceDeleteInput(d => ({ ...d, [res.id]: '' }))} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px', color: '#c0392b', borderColor: '#f5c0c0' }}>Delete</button>
                                 ) : (
