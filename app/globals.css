@@ -1,8 +1,13 @@
 @import "tailwindcss";
 
+/* This app has one designed theme (warm off-white, no dark variant), so it
+   opts out of the OS/browser dark preference entirely — otherwise native
+   controls (date/time pickers, selects, checkboxes, scrollbars) render with
+   dark-mode UA chrome against our always-light custom-styled pages. */
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  color-scheme: light;
 }
 
 @theme inline {
@@ -10,13 +15,6 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
 }
 
 /* Every element sizes with padding/border included, so a fixed
