@@ -138,7 +138,7 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
   const [addingEvent, setAddingEvent] = useState(false)
   const [newEventCopySource, setNewEventCopySource] = useState('')
   const [newEventCopyCategories, setNewEventCopyCategories] = useState({
-    workshops: false, moments: false, gear: false, info: false, partners: false, resources: false
+    workshops: false, moments: false, shifts: false, gear: false, info: false, partners: false, resources: false
   })
   const [archivedEventsOpen, setArchivedEventsOpen] = useState(false)
 
@@ -182,6 +182,7 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
   const [assignDateFilter, setAssignDateFilter] = useState('')
   const [assignTypeFilter, setAssignTypeFilter] = useState('all')
   const [assignUnassignedOnly, setAssignUnassignedOnly] = useState(false)
+  const [assignmentsView, setAssignmentsView] = useState('activity') // 'activity' | 'staff'
   const [addingShiftInline, setAddingShiftInline] = useState(false)
   const [newInlineShift, setNewInlineShift] = useState({ title: '', date: '', start_time: '', end_time: '', location: '', description: '' })
   const [inlineShiftMsg, setInlineShiftMsg] = useState(null)
@@ -1166,6 +1167,21 @@ const filteredGuests = guests.filter(g => {
       }
     }
 
+    if (categories.shifts) {
+      const rows = staffShifts.filter(s => s.event_id === sourceEventId)
+      if (rows.length > 0) {
+        tasks.push(supabase.from('staff_shifts').insert(rows.map(s => ({
+          event_id: targetEventId,
+          title: s.title,
+          shift_date: shiftDate(s.shift_date),
+          start_time: s.start_time,
+          end_time: s.end_time,
+          location: s.location,
+          description: s.description
+        }))))
+      }
+    }
+
     if (categories.gear) {
       const gearRows = gearItems.filter(g => g.event_id === sourceEventId)
       if (gearRows.length > 0) {
@@ -1241,7 +1257,7 @@ const filteredGuests = guests.filter(g => {
       setEventMsg({ type: 'success', text: 'Event created.' })
       setNewEvent({ name: '', description: '', location: '', start_date: '', end_date: '', registration_opens_at: '' })
       setNewEventCopySource('')
-      setNewEventCopyCategories({ workshops: false, moments: false, gear: false, info: false, partners: false, resources: false })
+      setNewEventCopyCategories({ workshops: false, moments: false, shifts: false, gear: false, info: false, partners: false, resources: false })
       await loadAll()
     } else setEventMsg({ type: 'error', text: 'Could not create event.' })
     setAddingEvent(false)
@@ -2984,6 +3000,7 @@ const filteredGuests = guests.filter(g => {
                 {[
                   ['workshops', 'Workshops & sessions'],
                   ['moments', 'Open moments'],
+                  ['shifts', 'Back of house shifts'],
                   ['gear', 'Gear / packing list'],
                   ['info', 'Info sections'],
                   ['partners', 'Partners'],
@@ -3186,6 +3203,18 @@ const filteredGuests = guests.filter(g => {
                 )}
               </div>
 
+              {/* View toggle: by activity (current behavior) vs. by staff member */}
+              <div style={{ display: 'flex', gap: 0, marginBottom: 12, border: '0.5px solid #1a1a1a', borderRadius: 8, width: 'fit-content', overflow: 'hidden' }}>
+                {[['activity', 'By Activity'], ['staff', 'By Staff']].map(([v, label]) => (
+                  <button key={v} onClick={() => setAssignmentsView(v)} style={{
+                    padding: '6px 16px', border: 'none', fontSize: 13, cursor: 'pointer',
+                    background: assignmentsView === v ? '#1a1a1a' : '#fff',
+                    color: assignmentsView === v ? '#fff' : '#1a1a1a',
+                    fontWeight: assignmentsView === v ? 500 : 400
+                  }}>{label}</button>
+                ))}
+              </div>
+
               {/* Type filter row */}
               <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
                 {['all', 'program', 'shift'].map(t => (
@@ -3196,7 +3225,7 @@ const filteredGuests = guests.filter(g => {
                 ))}
                 <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#555', cursor: 'pointer' }}>
                   <input type="checkbox" checked={assignUnassignedOnly} onChange={e => setAssignUnassignedOnly(e.target.checked)} />
-                  Unassigned only
+                  {assignmentsView === 'staff' ? 'Staff with nothing scheduled only' : 'Unassigned only'}
                 </label>
               </div>
 
@@ -3434,26 +3463,87 @@ const filteredGuests = guests.filter(g => {
                   return date.toLocaleDateString('en-US', { weekday: 'short' }) + ' ' + date.getDate()
                 }
 
+                const dayFilterPills = availableDates.length > 0 && (
+                  <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
+                    {['all', ...availableDates].map(d => {
+                      const active = d === 'all' ? !assignDateFilter : assignDateFilter === d
+                      return (
+                        <button key={d} onClick={() => setAssignDateFilter(d === 'all' ? '' : d)} style={{
+                          padding: '5px 14px', borderRadius: 20,
+                          border: '0.5px solid', borderColor: active ? '#1a1a1a' : '#E8E4DE',
+                          background: active ? '#1a1a1a' : '#fff',
+                          color: active ? '#fff' : '#8C8C8C',
+                          fontSize: 12, fontWeight: active ? 500 : 400, cursor: 'pointer'
+                        }}>
+                          {d === 'all' ? 'All' : formatAssignDayPill(d)}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )
+
+                if (assignmentsView === 'staff') {
+                  const relevantStaff = staffMembers.filter(sm => sm.is_active !== false).slice().sort((a, b) => a.name.localeCompare(b.name))
+                  const staffRows = relevantStaff.map(sm => {
+                    const direct = typeFilteredItems.filter(item => eventStaffAssignments.some(a => a.staff_id === sm.id && (
+                      item.type === 'session' ? a.session_id === item.id :
+                      item.type === 'moment' ? a.moment_id === item.id :
+                      a.shift_id === item.id
+                    )))
+                    const directKeys = new Set(direct.map(i => i.type + '_' + i.id))
+                    // Workshop-wide vendor coverage — same rule as isItemUnassigned/renderItemCard above.
+                    const workshopWide = typeFilteredItems.filter(item =>
+                      item.type === 'session' && item.workshopId &&
+                      !directKeys.has(item.type + '_' + item.id) &&
+                      staffWorkshopAssns.some(a => a.staff_id === sm.id && a.workshop_id === item.workshopId)
+                    )
+                    let items = [...direct, ...workshopWide].sort((a, b) => (a.date + 'T' + a.start_time) < (b.date + 'T' + b.start_time) ? -1 : 1)
+                    if (assignDateFilter) items = items.filter(i => i.date === assignDateFilter)
+                    return { staff: sm, items }
+                  })
+                  const visibleRows = assignUnassignedOnly ? staffRows.filter(r => r.items.length === 0) : staffRows
+
+                  return (
+                    <div>
+                      {dayFilterPills}
+                      {visibleRows.length === 0 ? (
+                        <div style={{ fontSize: 13, color: '#aaa' }}>No staff match the current filters.</div>
+                      ) : visibleRows.map(({ staff: sm, items }) => (
+                        <div key={sm.id} style={{ ...card, marginBottom: 10 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: items.length ? 10 : 0, flexWrap: 'wrap' }}>
+                            <div style={{ fontSize: 14, fontWeight: 600 }}>{sm.name}</div>
+                            {sm.is_vendor && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, background: '#FFF8E8', color: '#9a5a18', border: '0.5px solid #e8c080' }}>Vendor</span>}
+                            {sm.role && <span style={{ fontSize: 12, color: '#aaa' }}>{sm.role}</span>}
+                            <span style={{ fontSize: 11, color: '#aaa', marginLeft: 'auto' }}>{items.length} item{items.length !== 1 ? 's' : ''}</span>
+                          </div>
+                          {items.length === 0 ? (
+                            <div style={{ fontSize: 12, color: '#c99', fontStyle: 'italic' }}>Nothing scheduled{assignDateFilter ? ' on this day' : ''}.</div>
+                          ) : (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                              {items.map(item => {
+                                const badge = typeBadge[item.type]
+                                return (
+                                  <div key={item.type + '_' + item.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: '#FAFAF8', borderRadius: 6, flexWrap: 'wrap' }}>
+                                    <span style={{ fontSize: 11, color: '#888', minWidth: 150 }}>
+                                      {new Date(item.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} · {formatTime(item.start_time)}–{formatTime(item.end_time)}
+                                    </span>
+                                    <span style={{ fontSize: 10, fontWeight: 600, padding: '2px 8px', borderRadius: 10, background: badge.bg, color: badge.color }}>{badge.label}</span>
+                                    <span style={{ fontSize: 12, fontWeight: 500 }}>{item.title}</span>
+                                    {item.location && <span style={{ fontSize: 11, color: '#aaa' }}>📍 {item.location}</span>}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )
+                }
+
                 return (
                   <div>
-                    {availableDates.length > 0 && (
-                      <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
-                        {['all', ...availableDates].map(d => {
-                          const active = d === 'all' ? !assignDateFilter : assignDateFilter === d
-                          return (
-                            <button key={d} onClick={() => setAssignDateFilter(d === 'all' ? '' : d)} style={{
-                              padding: '5px 14px', borderRadius: 20,
-                              border: '0.5px solid', borderColor: active ? '#1a1a1a' : '#E8E4DE',
-                              background: active ? '#1a1a1a' : '#fff',
-                              color: active ? '#fff' : '#8C8C8C',
-                              fontSize: 12, fontWeight: active ? 500 : 400, cursor: 'pointer'
-                            }}>
-                              {d === 'all' ? 'All' : formatAssignDayPill(d)}
-                            </button>
-                          )
-                        })}
-                      </div>
-                    )}
+                    {dayFilterPills}
                     {renderSection(visibleItems)}
                   </div>
                 )
@@ -3552,18 +3642,25 @@ const filteredGuests = guests.filter(g => {
                           {togglingStaffId === sm.id ? '…' : sm.is_active === false ? 'Activate' : 'Deactivate'}
                         </button>
                         {!isDeleting ? (
-                          <button onClick={() => setStaffDeleteInput(d => ({ ...d, [sm.id]: '' }))} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px', color: '#c0392b', borderColor: '#f5c0c0' }}>Delete</button>
+                          <button onClick={() => setStaffDeleteInput(d => ({ ...d, [sm.id]: '' }))} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px', color: '#c0392b', borderColor: '#f5c0c0' }}>Delete Permanently</button>
                         ) : (
-                          <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
-                            <input
-                              placeholder={'Type "' + sm.name + '" to confirm'}
-                              value={staffDeleteInput[sm.id] || ''}
-                              onChange={e => setStaffDeleteInput(d => ({ ...d, [sm.id]: e.target.value }))}
-                              style={{ fontSize: 11, padding: '4px 8px', borderRadius: 6, border: '0.5px solid #f5c0c0', width: 160 }}
-                            />
-                            <button onClick={() => deleteStaffMember(sm.id, sm.name)} disabled={(staffDeleteInput[sm.id] || '') !== sm.name}
-                              style={{ ...btn('#c0392b', '#fff'), fontSize: 11, padding: '4px 10px', opacity: (staffDeleteInput[sm.id] || '') !== sm.name ? 0.4 : 1 }}>Delete</button>
-                            <button onClick={() => setStaffDeleteInput(d => { const n = { ...d }; delete n[sm.id]; return n })} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 8px' }}>✕</button>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, flexBasis: '100%' }}>
+                            <div style={{ fontSize: 11, color: '#c0392b', lineHeight: 1.4, maxWidth: 420 }}>
+                              This permanently deletes {sm.name}{memberEventAssns.length > 0
+                                ? ' and removes them from all ' + memberEventAssns.length + ' linked event' + (memberEventAssns.length !== 1 ? 's' : '') + ' (' + memberEventAssns.map(a => a.events?.name).filter(Boolean).join(', ') + ')'
+                                : ''} — not just the one you're currently viewing. This can't be undone.
+                            </div>
+                            <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+                              <input
+                                placeholder={'Type "' + sm.name + '" to confirm'}
+                                value={staffDeleteInput[sm.id] || ''}
+                                onChange={e => setStaffDeleteInput(d => ({ ...d, [sm.id]: e.target.value }))}
+                                style={{ fontSize: 11, padding: '4px 8px', borderRadius: 6, border: '0.5px solid #f5c0c0', width: 160 }}
+                              />
+                              <button onClick={() => deleteStaffMember(sm.id, sm.name)} disabled={(staffDeleteInput[sm.id] || '') !== sm.name}
+                                style={{ ...btn('#c0392b', '#fff'), fontSize: 11, padding: '4px 10px', opacity: (staffDeleteInput[sm.id] || '') !== sm.name ? 0.4 : 1 }}>Delete Permanently</button>
+                              <button onClick={() => setStaffDeleteInput(d => { const n = { ...d }; delete n[sm.id]; return n })} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 8px' }}>✕</button>
+                            </div>
                           </div>
                         )}
                       </div>
