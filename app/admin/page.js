@@ -189,6 +189,8 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
   const [shiftMsg, setShiftMsg] = useState(null)
   const [openAssignDropdown, setOpenAssignDropdown] = useState(null)
   const [showAllStaff, setShowAllStaff] = useState({})
+  const [addingAllFor, setAddingAllFor] = useState(null)
+  const [assignRoleFilter, setAssignRoleFilter] = useState({}) // per item key: 'all' | 'sp' | 'vendor'
   const [editingShiftId, setEditingShiftId] = useState(null)
   const [editShiftData, setEditShiftData] = useState({})
   const [savingShift, setSavingShift] = useState(false)
@@ -297,7 +299,7 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
       supabase.from('open_moments').select('*').order('date').order('start_time'),
       supabase.from('gear_items').select('*').order('sort_order'),
       supabase.from('gear_categories').select('*').order('sort_order'),
-      supabase.from('staff_assignments').select('*, staff(id, name), sessions(id, date, start_time, end_time, event_id, workshops(name)), open_moments(id, name, date, start_time, end_time, event_id), staff_shifts(id, title, shift_date, start_time, end_time, event_id)'),
+      supabase.from('staff_assignments').select('*, staff(id, name, is_vendor), sessions(id, date, start_time, end_time, event_id, workshops(name)), open_moments(id, name, date, start_time, end_time, event_id), staff_shifts(id, title, shift_date, start_time, end_time, event_id)'),
       supabase.from('staff').select('*').order('name'),
       supabase.from('staff_event_assignments').select('*, events(id, name)'),
       supabase.from('event_info_sections').select('*').order('sort_order'),
@@ -394,6 +396,125 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
     a.click()
     document.body.removeChild(a)
     setTimeout(() => URL.revokeObjectURL(url), 0)
+  }
+
+  function downloadText(content, filename) {
+    const blob = new Blob([content], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    setTimeout(() => URL.revokeObjectURL(url), 0)
+  }
+
+  // Shared by both export formats below — builds the flat list of schedule
+  // items for the selected event plus an assignment lookup, regardless of
+  // the Assignments tab's current type/date filters, so an export never
+  // silently omits data because of whatever the admin happened to be
+  // looking at on screen.
+  function buildScheduleExportData() {
+    const eid = selectedEvent.id
+    const eventSessionsAll = sessions.filter(s => s.event_id === eid)
+    const eventMomentsAll = openMoments.filter(m => m.event_id === eid)
+    const eventShiftsAll = staffShifts.filter(s => s.event_id === eid)
+    const eventAssignmentsAll = staffAssignments.filter(a => {
+      const e = a.sessions?.event_id || a.open_moments?.event_id || a.staff_shifts?.event_id
+      return e === eid
+    })
+    const activeStaff = staffMembers.filter(sm => sm.is_active !== false)
+
+    const items = [
+      ...eventSessionsAll.map(s => ({ type: 'Workshop', id: s.id, key: 'session_' + s.id, date: s.date, start_time: s.start_time, end_time: s.end_time, title: s.workshops?.name || 'Workshop', location: s.workshops?.location, workshopId: s.workshop_id })),
+      ...eventMomentsAll.map(m => ({ type: m.moment_type === 'mandatory' ? 'All Campers' : m.moment_type === 'amenity' ? 'Amenity' : 'Open Moment', id: m.id, key: 'moment_' + m.id, date: m.date, start_time: m.start_time, end_time: m.end_time, title: m.name, location: m.location })),
+      ...eventShiftsAll.map(s => ({ type: 'Back of House', id: s.id, key: 'shift_' + s.id, date: s.shift_date, start_time: s.start_time, end_time: s.end_time, title: s.title, location: s.location })),
+    ].sort((a, b) => (a.date + 'T' + (a.start_time || '')) < (b.date + 'T' + (b.start_time || '')) ? -1 : 1)
+
+    const isAssignedToItem = (staffId, item) => eventAssignmentsAll.some(a => a.staff_id === staffId && (
+      item.key.startsWith('session_') ? a.session_id === item.id :
+      item.key.startsWith('moment_') ? a.moment_id === item.id :
+      a.shift_id === item.id
+    )) || (item.workshopId ? staffWorkshopAssns.some(a => a.staff_id === staffId && a.workshop_id === item.workshopId) : false)
+
+    return { items, isAssignedToItem, activeStaff }
+  }
+
+  function exportSlug() {
+    return (selectedEvent.name || 'event').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '-' + new Date().toISOString().slice(0, 10)
+  }
+
+  // Plain-text schedule + assignment dump for the selected event — narrative
+  // format (not CSV) so it can be pasted straight into an AI chat for review
+  // (coverage gaps, staff overload, etc.) without any parsing on their end.
+  function exportStaffSchedule() {
+    if (!selectedEvent) return
+    const { items, isAssignedToItem, activeStaff } = buildScheduleExportData()
+    const assignedNamesFor = item => activeStaff.filter(sm => isAssignedToItem(sm.id, item)).map(sm => sm.name)
+
+    let out = 'SNOW PEAK WAY — STAFF SCHEDULE EXPORT\n'
+    out += 'Event: ' + selectedEvent.name + '\n'
+    out += 'Dates: ' + (selectedEvent.start_date || '') + ' to ' + (selectedEvent.end_date || '') + '\n'
+    out += 'Exported: ' + new Date().toISOString() + '\n'
+    out += '\n=== SCHEDULE BY DATE ===\n'
+
+    const byDate = {}
+    items.forEach(i => { (byDate[i.date || 'No date'] ||= []).push(i) })
+    Object.keys(byDate).sort().forEach(date => {
+      const label = date === 'No date' ? 'No date' : new Date(date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })
+      out += '\n' + label.toUpperCase() + '\n' + '-'.repeat(label.length) + '\n'
+      byDate[date].forEach(item => {
+        const names = assignedNamesFor(item)
+        out += (item.start_time ? formatTime(item.start_time) : '') + (item.end_time ? ' – ' + formatTime(item.end_time) : '') + ' | ' + item.type + ' | ' + item.title + '\n'
+        if (item.location) out += '  Location: ' + item.location + '\n'
+        out += '  Assigned: ' + (names.length ? names.join(', ') : 'UNASSIGNED') + '\n'
+      })
+    })
+
+    out += '\n\n=== STAFF SUMMARY ===\n'
+    activeStaff.slice().sort((a, b) => a.name.localeCompare(b.name)).forEach(sm => {
+      const mine = items.filter(item => isAssignedToItem(sm.id, item))
+      out += '\n' + sm.name + (sm.is_vendor ? ' (Vendor' + (sm.vendor_name ? ': ' + sm.vendor_name : '') + ')' : '') + ' — ' + mine.length + ' item' + (mine.length !== 1 ? 's' : '') + '\n'
+      if (mine.length === 0) {
+        out += '  Nothing scheduled.\n'
+      } else {
+        mine.forEach(item => {
+          const dateLabel = item.date ? new Date(item.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : ''
+          out += '  ' + dateLabel + ' ' + (item.start_time ? formatTime(item.start_time) : '') + (item.end_time ? '–' + formatTime(item.end_time) : '') + ' — ' + item.title + ' (' + item.type + ')\n'
+        })
+      }
+    })
+
+    const staffWithNothing = activeStaff.filter(sm => !items.some(item => isAssignedToItem(sm.id, item)))
+    if (staffWithNothing.length > 0) {
+      out += '\nSTAFF WITH NOTHING SCHEDULED:\n'
+      staffWithNothing.forEach(sm => { out += '  - ' + sm.name + '\n' })
+    }
+
+    downloadText(out, 'staff-schedule-' + exportSlug() + '.txt')
+  }
+
+  // One row per schedule item — opens cleanly in Excel/Sheets, unlike the
+  // narrative .txt export above which is meant for pasting into an AI chat.
+  function exportStaffScheduleCSV() {
+    if (!selectedEvent) return
+    const { items, isAssignedToItem, activeStaff } = buildScheduleExportData()
+    const rows = [['Date', 'Start', 'End', 'Type', 'Title', 'Location', 'Assigned Staff', 'Assigned Count']]
+    items.forEach(item => {
+      const names = activeStaff.filter(sm => isAssignedToItem(sm.id, item)).map(sm => sm.name)
+      rows.push([
+        item.date || '',
+        item.start_time ? formatTime(item.start_time) : '',
+        item.end_time ? formatTime(item.end_time) : '',
+        item.type,
+        item.title,
+        item.location || '',
+        names.join('; '),
+        String(names.length)
+      ])
+    })
+    downloadCSV(rows, 'staff-schedule-' + exportSlug() + '.csv')
   }
 
   function exportInviteLinks() {
@@ -1353,6 +1474,17 @@ const filteredGuests = guests.filter(g => {
   async function removeStaffAssignment(id) {
     await supabase.from('staff_assignments').delete().eq('id', id)
     loadAll()
+  }
+
+  // Assigns every given staff member to one item in a single insert, instead
+  // of one round-trip per person — used by the "Add all" button.
+  async function addAllStaffAssignments(staffIds, type, itemId) {
+    if (staffIds.length === 0) return
+    const col = type === 'session' ? 'session_id' : type === 'moment' ? 'moment_id' : 'shift_id'
+    const payload = staffIds.map(staffId => ({ staff_id: staffId, [col]: itemId }))
+    const { error } = await supabase.from('staff_assignments').insert(payload)
+    if (error) console.log('[addAllStaffAssignments] insert error:', error)
+    await loadAll()
   }
 
   function getStaffConflicts(staffId, targetDate, targetStart, targetEnd, excludeId = null) {
@@ -3204,15 +3336,35 @@ const filteredGuests = guests.filter(g => {
               </div>
 
               {/* View toggle: by activity (current behavior) vs. by staff member */}
-              <div style={{ display: 'flex', gap: 0, marginBottom: 12, border: '0.5px solid #1a1a1a', borderRadius: 8, width: 'fit-content', overflow: 'hidden' }}>
-                {[['activity', 'By Activity'], ['staff', 'By Staff']].map(([v, label]) => (
-                  <button key={v} onClick={() => setAssignmentsView(v)} style={{
-                    padding: '6px 16px', border: 'none', fontSize: 13, cursor: 'pointer',
-                    background: assignmentsView === v ? '#1a1a1a' : '#fff',
-                    color: assignmentsView === v ? '#fff' : '#1a1a1a',
-                    fontWeight: assignmentsView === v ? 500 : 400
-                  }}>{label}</button>
-                ))}
+              <div style={{ display: 'flex', gap: 10, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', gap: 0, border: '0.5px solid #1a1a1a', borderRadius: 8, width: 'fit-content', overflow: 'hidden' }}>
+                  {[['activity', 'By Activity'], ['staff', 'By Staff']].map(([v, label]) => (
+                    <button key={v} onClick={() => setAssignmentsView(v)} style={{
+                      padding: '6px 16px', border: 'none', fontSize: 13, cursor: 'pointer',
+                      background: assignmentsView === v ? '#1a1a1a' : '#fff',
+                      color: assignmentsView === v ? '#fff' : '#1a1a1a',
+                      fontWeight: assignmentsView === v ? 500 : 400
+                    }}>{label}</button>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <button
+                    onClick={exportStaffSchedule}
+                    disabled={!selectedEvent}
+                    title="Downloads the full schedule + assignments as a plain-text file — paste it into an AI chat for review."
+                    style={{ ...btn('#fff'), fontSize: 12, padding: '6px 14px', opacity: selectedEvent ? 1 : 0.5 }}
+                  >
+                    Export schedule (.txt)
+                  </button>
+                  <button
+                    onClick={exportStaffScheduleCSV}
+                    disabled={!selectedEvent}
+                    title="Downloads the full schedule + assignments as a spreadsheet-friendly CSV."
+                    style={{ ...btn('#fff'), fontSize: 12, padding: '6px 14px', opacity: selectedEvent ? 1 : 0.5 }}
+                  >
+                    Export schedule (.csv)
+                  </button>
+                </div>
               </div>
 
               {/* Type filter row */}
@@ -3279,6 +3431,8 @@ const filteredGuests = guests.filter(g => {
                   const allActiveStaff = staffMembers.filter(sm => sm.is_active !== false)
                   const eventStaff = allActiveStaff.filter(sm => staffEventAssns.some(a => a.staff_id === sm.id && a.event_id === selectedEvent.id))
                   const staffList = (isShowAll || eventStaff.length === 0) ? allActiveStaff : eventStaff
+                  const roleFilter = assignRoleFilter[itemKey] || 'all'
+                  const roleFilteredStaffList = staffList.filter(sm => roleFilter === 'all' ? true : roleFilter === 'vendor' ? !!sm.is_vendor : !sm.is_vendor)
                   const badge = typeBadge[item.type]
 
                   if (item.type === 'shift' && editingShiftId === item.id) {
@@ -3356,6 +3510,7 @@ const filteredGuests = guests.filter(g => {
                           {assigned.map(a => (
                             <span key={a.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 10px', borderRadius: 20, background: '#EEF3EE', color: '#2D4A2D', fontSize: 12, fontWeight: 500 }}>
                               {a.staff?.name}
+                              {a.staff?.is_vendor && <span style={{ fontSize: 9, fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase', opacity: 0.75 }}>Partner</span>}
                               <button type="button" onClick={() => { setStaffAssignments(prev => prev.filter(a2 => a2.id !== a.id)); removeStaffAssignment(a.id) }}
                                 style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#2D4A2D', padding: 0, fontSize: 14, lineHeight: 1 }}>×</button>
                             </span>
@@ -3375,18 +3530,54 @@ const filteredGuests = guests.filter(g => {
                       {isDropdownOpen && (
                         <div style={{ border: '0.5px solid #e0e0e0', borderRadius: 8, padding: '8px 12px', background: '#F5F3F0' }}>
                           {eventStaff.length > 0 && (
-                            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#555', cursor: 'pointer', marginBottom: 8, paddingBottom: 8, borderBottom: '0.5px solid #e0e0e0' }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#555', cursor: 'pointer', marginBottom: 8 }}>
                               <input type="checkbox" checked={isShowAll} onChange={e => setShowAllStaff(s => ({ ...s, [itemKey]: e.target.checked }))} />
                               Show all active staff
                             </label>
                           )}
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8, paddingBottom: 8, borderBottom: '0.5px solid #e0e0e0', flexWrap: 'wrap' }}>
+                            <div style={{ display: 'flex', gap: 4 }}>
+                              {[['all', 'All'], ['sp', 'SP Staff'], ['vendor', 'Partners']].map(([key, label]) => (
+                                <button key={key} type="button" onClick={() => setAssignRoleFilter(f => ({ ...f, [itemKey]: key }))} style={{
+                                  padding: '3px 10px', borderRadius: 14, border: '0.5px solid #d0d0d0', fontSize: 11, cursor: 'pointer',
+                                  background: roleFilter === key ? '#1a1a1a' : '#fff', color: roleFilter === key ? '#fff' : '#555'
+                                }}>{label}</button>
+                              ))}
+                            </div>
+                            {(() => {
+                              const unassignedInList = roleFilteredStaffList.filter(sm => !assignedIds.has(sm.id))
+                              if (unassignedInList.length === 0) return null
+                              const isAddingAll = addingAllFor === itemKey
+                              const addAllLabel = roleFilter === 'vendor' ? 'Add all Partners' : roleFilter === 'sp' ? 'Add all SP Staff' : 'Add all'
+                              return (
+                                <button
+                                  onClick={() => {
+                                    setAddingAllFor(itemKey)
+                                    const col = item.type === 'session' ? 'session_id' : item.type === 'moment' ? 'moment_id' : 'shift_id'
+                                    setStaffAssignments(prev => [...prev, ...unassignedInList.map(sm => ({
+                                      id: 'opt_' + Date.now() + '_' + sm.id, staff_id: sm.id, [col]: item.id,
+                                      staff: { id: sm.id, name: sm.name, is_vendor: sm.is_vendor },
+                                      sessions: item.type === 'session' ? { id: item.id, date: item.date, start_time: item.start_time, end_time: item.end_time, event_id: selectedEvent.id, workshops: { name: item.title } } : null,
+                                      open_moments: item.type === 'moment' ? { id: item.id, name: item.title, date: item.date, start_time: item.start_time, end_time: item.end_time, event_id: selectedEvent.id } : null,
+                                      staff_shifts: item.type === 'shift' ? { id: item.id, title: item.title, shift_date: item.date, start_time: item.start_time, end_time: item.end_time, event_id: selectedEvent.id } : null,
+                                    }))])
+                                    addAllStaffAssignments(unassignedInList.map(sm => sm.id), item.type, item.id).finally(() => setAddingAllFor(null))
+                                  }}
+                                  disabled={isAddingAll}
+                                  style={{ fontSize: 11, padding: '4px 10px', borderRadius: 6, border: '0.5px solid #1a1a1a', background: '#1a1a1a', color: '#fff', cursor: isAddingAll ? 'default' : 'pointer', opacity: isAddingAll ? 0.6 : 1 }}
+                                >
+                                  {isAddingAll ? 'Adding…' : addAllLabel + ' (' + unassignedInList.length + ')'}
+                                </button>
+                              )
+                            })()}
+                          </div>
                           {eventStaff.length === 0 && !isShowAll && (
                             <div style={{ fontSize: 11, color: '#aaa', marginBottom: 6 }}>No event-specific staff — showing all active.</div>
                           )}
-                          {staffList.length === 0 && (
-                            <div style={{ fontSize: 12, color: '#aaa' }}>No active staff members found.</div>
+                          {roleFilteredStaffList.length === 0 && (
+                            <div style={{ fontSize: 12, color: '#aaa' }}>No staff match this filter.</div>
                           )}
-                          {staffList.map(sm => {
+                          {roleFilteredStaffList.map(sm => {
                             const isAssigned = assignedIds.has(sm.id)
                             const assignmentRow = isAssigned ? assigned.find(a => a.staff_id === sm.id) : null
                             const conflicts = !isAssigned && item.date && item.start_time && item.end_time
@@ -3403,7 +3594,7 @@ const filteredGuests = guests.filter(g => {
                                     const col = item.type === 'session' ? 'session_id' : item.type === 'moment' ? 'moment_id' : 'shift_id'
                                     setStaffAssignments(prev => [...prev, {
                                       id: 'opt_' + Date.now(), staff_id: sm.id, [col]: item.id,
-                                      staff: { id: sm.id, name: sm.name },
+                                      staff: { id: sm.id, name: sm.name, is_vendor: sm.is_vendor },
                                       sessions: item.type === 'session' ? { id: item.id, date: item.date, start_time: item.start_time, end_time: item.end_time, event_id: selectedEvent.id, workshops: { name: item.title } } : null,
                                       open_moments: item.type === 'moment' ? { id: item.id, name: item.title, date: item.date, start_time: item.start_time, end_time: item.end_time, event_id: selectedEvent.id } : null,
                                       staff_shifts: item.type === 'shift' ? { id: item.id, title: item.title, shift_date: item.date, start_time: item.start_time, end_time: item.end_time, event_id: selectedEvent.id } : null,
@@ -3414,6 +3605,9 @@ const filteredGuests = guests.filter(g => {
                                 style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '7px 6px', borderRadius: 6, cursor: 'pointer', background: isAssigned ? '#EAF4EB' : 'transparent', marginBottom: 2 }}>
                                 <span style={{ width: 16, flexShrink: 0, color: '#2D7A3A', fontSize: 13, fontWeight: 700 }}>{isAssigned ? '✓' : ''}</span>
                                 <span style={{ fontSize: 12, fontWeight: 500, color: '#1a1a1a', flex: 1 }}>{sm.name}</span>
+                                {sm.is_vendor && (
+                                  <span style={{ fontSize: 9, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', padding: '2px 7px', borderRadius: 20, background: '#FFF8E8', color: '#9a5a18', border: '0.5px solid #E8C080', flexShrink: 0 }}>Partner</span>
+                                )}
                                 {hasConflict && (
                                   <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.04em', padding: '2px 7px', borderRadius: 20, background: '#FEF3E2', color: '#B5622A', border: '0.5px solid #F0C888', flexShrink: 0 }}>Conflict</span>
                                 )}
@@ -3852,7 +4046,7 @@ const filteredGuests = guests.filter(g => {
                                     {res.is_global && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, background: '#EEF3EE', color: '#2D4A2D', border: '0.5px solid #C0D4C0' }}>Global</span>}
                                     {res.hidden_from_vendors && <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', padding: '2px 7px', borderRadius: 10, background: '#F5F0E8', color: '#A06000', border: '0.5px solid #E8C080' }}>Hidden from vendors</span>}
                                   </div>
-                                  {res.description && <div style={{ fontSize: 12, color: '#aaa' }}>{res.description}</div>}
+                                  {res.description && <div style={{ fontSize: 12, color: '#aaa', lineHeight: 1.5, whiteSpace: 'pre-line' }}>{res.description}</div>}
                                 </div>
                               </div>
                               <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center', flexWrap: 'wrap' }}>

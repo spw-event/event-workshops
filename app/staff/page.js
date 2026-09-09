@@ -17,6 +17,9 @@ export default function StaffPage() {
   const [myAssignments, setMyAssignments] = useState([])
   const [allSessions, setAllSessions] = useState([])
   const [allMoments, setAllMoments] = useState([])
+  const [allShifts, setAllShifts] = useState([])
+  const [allStaffAssignments, setAllStaffAssignments] = useState([])
+  const [allWorkshopAssns, setAllWorkshopAssns] = useState([])
   const [staffResources, setStaffResources] = useState([])
   const [eventInfoSections, setEventInfoSections] = useState([])
   const [eventPartners, setEventPartners] = useState([])
@@ -35,6 +38,9 @@ export default function StaffPage() {
   const [guestQuery, setGuestQuery] = useState('')
   const [guestResults, setGuestResults] = useState([])
 
+  // My Agenda tab — day filter
+  const [agendaDayFilter, setAgendaDayFilter] = useState('all')
+
   // Public Schedule tab (read-only reference view of the full guest schedule)
   const [pubDayFilter, setPubDayFilter] = useState('all')
   const [pubTypeFilter, setPubTypeFilter] = useState('all')
@@ -44,6 +50,9 @@ export default function StaffPage() {
   // Guide tab — which info section (by id) is currently expanded
   const [guideSection, setGuideSection] = useState(null)
   const [mapFullscreen, setMapFullscreen] = useState(false)
+
+  // Team Schedule tab — which item keys have their notes expanded
+  const [expandedNotes, setExpandedNotes] = useState({})
 
   // Persists whichever record just authenticated (from a staff-table row or
   // an instructor_pins row) under the same unified keys /login writes, plus
@@ -165,7 +174,10 @@ export default function StaffPage() {
       { data: swa },
       { data: infoSections },
       { data: partners },
-      { data: gear }
+      { data: gear },
+      { data: shifts },
+      { data: allSA },
+      { data: allWA }
     ] = await Promise.all([
       supabase.from('staff_assignments')
         .select('id, staff_id, session_id, moment_id, shift_id, sessions(id, date, start_time, end_time, capacity, event_id, workshops(name, location)), open_moments(id, name, date, start_time, end_time, location, moment_type, event_id), staff_shifts(id, title, shift_date, start_time, end_time, location, shift_type, description, event_id)')
@@ -175,12 +187,17 @@ export default function StaffPage() {
       supabase.from('guest_events').select('*, guests(id, name)'),
       supabase.from('sessions').select('*, workshops(name, location, instructor, description)').order('date').order('start_time'),
       supabase.from('open_moments').select('*').order('date').order('start_time'),
-      supabase.from('staff_event_assignments').select('*, events(id, name, status)').eq('staff_id', staffRecord.id),
+      supabase.from('staff_event_assignments').select('*, events(*)').eq('staff_id', staffRecord.id),
       supabase.from('staff_resources').select('*').order('sort_order'),
       supabase.from('staff_workshop_assignments').select('*').eq('staff_id', staffRecord.id),
       supabase.from('event_info_sections').select('*').order('sort_order'),
       supabase.from('event_partners').select('*').order('sort_order'),
-      supabase.from('gear_items').select('*').order('sort_order')
+      supabase.from('gear_items').select('*').order('sort_order'),
+      supabase.from('staff_shifts').select('*').order('shift_date').order('start_time'),
+      supabase.from('staff_assignments')
+        .select('id, staff_id, session_id, moment_id, shift_id, staff(id, name, is_vendor)')
+        .not('staff_id', 'is', null),
+      supabase.from('staff_workshop_assignments').select('id, staff_id, workshop_id, staff(id, name, is_vendor)')
     ])
     console.log('[loadData] staffRecord.id:', staffRecord.id)
     console.log('[loadData] myA count:', myA?.length ?? 'null', 'error:', myAError ? JSON.stringify(myAError) : null)
@@ -195,6 +212,9 @@ export default function StaffPage() {
     setEventInfoSections(infoSections || [])
     setEventPartners(partners || [])
     setGearItems(gear || [])
+    setAllShifts(shifts || [])
+    setAllStaffAssignments(allSA || [])
+    setAllWorkshopAssns(allWA || [])
     // Union: staff_event_assignments + events derived from actual assignments
     const seaEvts = (seaData || []).map(sea => sea.events).filter(Boolean)
     const seaEventIds = new Set(seaEvts.map(e => e.id))
@@ -763,6 +783,10 @@ export default function StaffPage() {
             )
           })
         )}
+
+        {/* Staff Resources — always-open section (not another accordion toggle) with the category buttons right below the header */}
+        <div style={dateHdr}>Staff Resources</div>
+        {renderResourcesTab()}
       </div>
     )
   }
@@ -811,9 +835,115 @@ export default function StaffPage() {
     )
   }
 
+  // Full team schedule — every session/moment/shift for the selected event
+  // with who's assigned, read only. Reached via a button under My Agenda;
+  // staff-only (vendors don't get this — see the gate on the button itself).
+  function renderTeamScheduleTab() {
+    const eid = selectedEvent?.id
+    if (!eid) {
+      return <div style={{ textAlign: 'center', color: '#8C8C8C', padding: '48px 0', fontSize: 14 }}>Select an event to view its schedule.</div>
+    }
+
+    const items = []
+    allSessions.filter(s => s.event_id === eid).forEach(s => {
+      const direct = allStaffAssignments.filter(a => a.session_id === s.id).map(a => a.staff).filter(Boolean)
+      const workshopWide = allWorkshopAssns.filter(a => a.workshop_id === s.workshop_id).map(a => a.staff).filter(Boolean)
+      items.push({
+        key: 'session_' + s.id, date: s.date, start: s.start_time,
+        time: formatTime(s.start_time) + ' – ' + formatTime(s.end_time),
+        title: s.workshops?.name || 'Workshop', location: s.workshops?.location || '',
+        type: 'Workshop', typeColor: '#2D4A2D', typeBg: '#EEF3EE',
+        notes: s.staff_notes || null,
+        staffList: [...direct, ...workshopWide]
+      })
+    })
+    allMoments.filter(m => m.event_id === eid).forEach(m => {
+      const isMand = m.moment_type === 'mandatory'
+      items.push({
+        key: 'moment_' + m.id, date: m.date, start: m.start_time,
+        time: formatTime(m.start_time) + ' – ' + formatTime(m.end_time),
+        title: m.name, location: m.location || '',
+        type: isMand ? 'Mandatory' : 'Open Moment',
+        typeColor: isMand ? '#7A5C3C' : '#B5622A',
+        typeBg: isMand ? '#F5F0E8' : '#FDF5EE',
+        notes: m.staff_notes || null,
+        staffList: allStaffAssignments.filter(a => a.moment_id === m.id).map(a => a.staff).filter(Boolean)
+      })
+    })
+    allShifts.filter(s => s.event_id === eid).forEach(s => {
+      items.push({
+        key: 'shift_' + s.id, date: s.shift_date, start: s.start_time,
+        time: formatTime(s.start_time) + ' – ' + formatTime(s.end_time),
+        title: s.title, location: s.location || '',
+        type: 'Back of House', typeColor: '#666', typeBg: '#EFEDEA',
+        notes: s.description || null,
+        staffList: allStaffAssignments.filter(a => a.shift_id === s.id).map(a => a.staff).filter(Boolean)
+      })
+    })
+
+    const byDate = {}
+    items.forEach(item => { (byDate[item.date] ||= []).push(item) })
+    const dates = Object.keys(byDate).sort()
+
+    return (
+      <div>
+        <button onClick={() => setActiveTab('agenda')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#8C8C8C', fontSize: 13, padding: 0, marginBottom: 20, display: 'flex', alignItems: 'center', gap: 6 }}>
+          ← Back to My Agenda
+        </button>
+        {dates.length === 0 ? (
+          <div style={{ textAlign: 'center', color: '#8C8C8C', padding: '48px 0', fontSize: 14 }}>No schedule items for this event.</div>
+        ) : dates.map(date => (
+          <div key={date}>
+            <div style={dateHdr}>{formatDate(date)}</div>
+            {byDate[date].sort((a, b) => (a.start || '').localeCompare(b.start || '')).map(item => {
+              const notesOpen = !!expandedNotes[item.key]
+              return (
+              <div key={item.key} style={{ ...card, borderLeft: '3px solid ' + item.typeColor }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
+                  <div style={{ fontSize: 13, color: '#8C8C8C' }}>{item.time}</div>
+                  <span style={badge(item.typeBg, item.typeColor)}>{item.type}</span>
+                </div>
+                <div style={{ fontSize: 15, fontWeight: 500, marginBottom: item.location ? 4 : 6 }}>{item.title}</div>
+                {item.location && <div style={{ fontSize: 13, color: '#8C8C8C', marginBottom: 8 }}>📍 {item.location}</div>}
+                {item.staffList.length === 0 ? (
+                  <span style={{ fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 20, background: '#FFF8E8', color: '#A06000', border: '0.5px solid #F0D880' }}>
+                    Unassigned
+                  </span>
+                ) : (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                    {item.staffList.map((sm, i) => (
+                      <span key={sm.id + '_' + i} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 10px', borderRadius: 20, fontSize: 12, background: '#F0EDE8', color: '#555' }}>
+                        {sm.name}
+                        {sm.is_vendor && <span style={{ fontSize: 9, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', opacity: 0.75 }}>Partner</span>}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {item.notes && (
+                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: '0.5px solid #F0EDE8' }}>
+                    <button onClick={() => setExpandedNotes(n => ({ ...n, [item.key]: !notesOpen }))}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#8C8C8C', fontSize: 12, padding: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
+                      Notes {notesOpen ? '▾' : '▸'}
+                    </button>
+                    {notesOpen && (
+                      <div style={{ fontSize: 13, color: '#8C8C8C', marginTop: 8, lineHeight: 1.55, fontStyle: 'italic', whiteSpace: 'pre-line' }}>
+                        {item.notes}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+              )
+            })}
+          </div>
+        ))}
+      </div>
+    )
+  }
+
   // Instructor fallback view (read-only roster for vendor/workshop instructors)
   if (staffMember && staffRole === 'instructor') return (
-    <div style={{ fontFamily: 'sans-serif', maxWidth: 720, margin: '0 auto', padding: '24px 16px', color: '#1a1a1a', background: '#FAFAF8', minHeight: '100vh' }}>
+    <div style={{ fontFamily: 'sans-serif', maxWidth: 720, width: '100%', margin: '0 auto', padding: '24px 16px', color: '#1a1a1a', background: '#FAFAF8', minHeight: '100vh' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 24, flexWrap: 'wrap' }}>
         <div>
           <div style={{ fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#8C8C8C', marginBottom: 4 }}>
@@ -909,7 +1039,7 @@ export default function StaffPage() {
   const isVendor = !!staffMember.is_vendor
 
   return (
-    <div style={{ fontFamily: 'sans-serif', maxWidth: 720, margin: '0 auto', padding: '24px 16px', color: '#1a1a1a', background: '#FAFAF8', minHeight: '100vh' }}>
+    <div style={{ fontFamily: 'sans-serif', maxWidth: 720, width: '100%', margin: '0 auto', padding: '24px 16px', color: '#1a1a1a', background: '#FAFAF8', minHeight: '100vh' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 24, flexWrap: 'wrap' }}>
         <div>
           <div style={{ fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#8C8C8C', marginBottom: 4 }}>
@@ -957,7 +1087,7 @@ export default function StaffPage() {
         scrollbarWidth: 'none', msOverflowStyle: 'none',
         borderBottom: '0.5px solid #E0DEDA', marginBottom: 24
       }}>
-        {[['schedule', 'Schedule'], ['agenda', 'My Agenda'], ['site', 'Site'], ['guide', 'Guide'], ['packing', 'Packing List'], ['resources', 'Resources']].map(([t, label]) => (
+        {[['schedule', 'Schedule'], ['agenda', 'My Agenda'], ['site', 'Site'], ['guide', 'Guide'], ['packing', 'Packing List']].map(([t, label]) => (
           <button key={t} onClick={() => setActiveTab(t)} style={{
             flex: '0 0 auto',
             padding: '8px 14px', border: 'none', background: 'none', cursor: 'pointer',
@@ -974,10 +1104,37 @@ export default function StaffPage() {
       {/* MY AGENDA — this staffer's own back-of-house shift coverage only */}
       {activeTab === 'agenda' && (
         <div>
+          {!isVendor && (
+            <button onClick={() => setActiveTab('teamSchedule')} style={{
+              display: 'inline-flex', alignItems: 'center', gap: 5, marginBottom: 16,
+              padding: '5px 12px', borderRadius: 20, border: '0.5px solid #d0d0d0',
+              background: '#fff', color: '#555', fontSize: 12, cursor: 'pointer'
+            }}>
+              View full schedule with staff assignments →
+            </button>
+          )}
           {myDates.length === 0 && (
             <div style={{ textAlign: 'center', color: '#8C8C8C', padding: '48px 0', fontSize: 14 }}>No shifts assigned yet.</div>
           )}
-          {myDates.map(date => (
+          {myDates.length > 0 && (
+            <div style={{ display: 'flex', gap: 6, marginBottom: 20, flexWrap: 'wrap' }}>
+              {['all', ...myDates].map(d => {
+                const active = agendaDayFilter === d
+                return (
+                  <button key={d} onClick={() => setAgendaDayFilter(d)} style={{
+                    padding: '5px 14px', borderRadius: 20,
+                    border: '0.5px solid ' + (active ? '#1a1a1a' : '#E8E4DE'),
+                    background: active ? '#1a1a1a' : '#fff',
+                    color: active ? '#fff' : '#8C8C8C',
+                    fontSize: 12, fontWeight: active ? 500 : 400, cursor: 'pointer'
+                  }}>
+                    {d === 'all' ? 'All' : new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' })}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+          {(agendaDayFilter === 'all' ? myDates : myDates.filter(d => d === agendaDayFilter)).map(date => (
             <div key={date}>
               <div style={dateHdr}>{formatDate(date)}</div>
               {myGrouped[date].map(a => {
@@ -1003,6 +1160,9 @@ export default function StaffPage() {
         </div>
       )}
 
+      {/* TEAM SCHEDULE — full schedule with who's assigned, staff-only (not in the main tab bar, reached via the button above) */}
+      {activeTab === 'teamSchedule' && !isVendor && renderTeamScheduleTab()}
+
       {/* SITE */}
       {activeTab === 'site' && renderSiteTab()}
 
@@ -1011,9 +1171,6 @@ export default function StaffPage() {
 
       {/* PACKING LIST */}
       {activeTab === 'packing' && renderPackingListTab()}
-
-      {/* RESOURCES — distinct top-level tab; categories flagged hidden_from_vendors are excluded for partners */}
-      {activeTab === 'resources' && renderResourcesTab()}
     </div>
   )
 }

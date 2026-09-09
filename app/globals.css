@@ -26,6 +26,25 @@
 
 html, body {
   width: 100%;
+  overflow-x: hidden;
+}
+
+/* Reserves the vertical scrollbar's width permanently (desktop browsers
+   that don't overlay it) so switching between tabs of different heights
+   never shifts the centered content left/right as the scrollbar toggles
+   on and off. */
+html {
+  scrollbar-gutter: stable;
+}
+
+/* No image (site maps, uploaded photos, etc.) should ever be able to widen
+   its container past the viewport — most CSS resets include this by
+   default, but this project's didn't, and a large-intrinsic-size image
+   given only `width: 100%` with no explicit height can render at native
+   size before its layout is fully resolved on some mobile browsers. */
+img {
+  max-width: 100%;
+  height: auto;
 }
 
 body {
