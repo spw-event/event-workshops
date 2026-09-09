@@ -20,6 +20,7 @@ export default function StaffPage() {
   const [allShifts, setAllShifts] = useState([])
   const [allStaffAssignments, setAllStaffAssignments] = useState([])
   const [allWorkshopAssns, setAllWorkshopAssns] = useState([])
+  const [myWorkshopAssns, setMyWorkshopAssns] = useState([]) // this account's own workshop-wide (vendor) coverage
   const [staffResources, setStaffResources] = useState([])
   const [eventInfoSections, setEventInfoSections] = useState([])
   const [eventPartners, setEventPartners] = useState([])
@@ -44,6 +45,7 @@ export default function StaffPage() {
   // Public Schedule tab (read-only reference view of the full guest schedule)
   const [pubDayFilter, setPubDayFilter] = useState('all')
   const [pubTypeFilter, setPubTypeFilter] = useState('all')
+  const [scheduleViewMode, setScheduleViewMode] = useState('public') // 'public' | 'staff' — staff-only toggle
   const [pubExpandedSessionId, setPubExpandedSessionId] = useState(null)
   const [expandedPublicRosters, setExpandedPublicRosters] = useState({})
 
@@ -51,7 +53,7 @@ export default function StaffPage() {
   const [guideSection, setGuideSection] = useState(null)
   const [mapFullscreen, setMapFullscreen] = useState(false)
 
-  // Team Schedule tab — which item keys have their notes expanded
+  // Schedule tab, staff mode — which item keys have their notes expanded
   const [expandedNotes, setExpandedNotes] = useState({})
 
   // Persists whichever record just authenticated (from a staff-table row or
@@ -215,6 +217,7 @@ export default function StaffPage() {
     setAllShifts(shifts || [])
     setAllStaffAssignments(allSA || [])
     setAllWorkshopAssns(allWA || [])
+    setMyWorkshopAssns(swa || [])
     // Union: staff_event_assignments + events derived from actual assignments
     const seaEvts = (seaData || []).map(sea => sea.events).filter(Boolean)
     const seaEventIds = new Set(seaEvts.map(e => e.id))
@@ -397,17 +400,33 @@ export default function StaffPage() {
     )
   }
 
-  // Filter this staff member's own assignments to the selected event, then to
-  // staff-shift assignments only — My Agenda is back-of-house shift coverage;
-  // session/moment duty is now referenced via the read-only Schedule tab instead.
+  // Filter this staff member's own assignments to the selected event. Regular
+  // staff mainly get shift assignments (session/moment duty is referenced via
+  // the Schedule tab's Staff View instead), but vendors need their own
+  // sessions surfaced too — direct assignments plus workshop-wide blanket
+  // coverage from staff_workshop_assignments — since that's how most vendor
+  // coverage is actually granted. Shifts stay included for everyone: a vendor
+  // occasionally does get one, and it shouldn't disappear from their agenda.
   const myFilteredAssignments = selectedEvent
     ? myAssignments.filter(a => {
         const eid = a.sessions?.event_id || a.open_moments?.event_id || a.staff_shifts?.event_id
         return eid === selectedEvent.id
       })
     : myAssignments
+  const myIsVendor = !!staffMember?.is_vendor
   const myShiftAssignments = myFilteredAssignments.filter(a => a.staff_shifts)
-  const myGrouped = groupByDate(myShiftAssignments)
+  const myAgendaAssignments = myIsVendor
+    ? (() => {
+        const directSessions = myFilteredAssignments.filter(a => a.sessions)
+        const directSessionIds = new Set(directSessions.map(a => a.session_id))
+        const workshopIds = myWorkshopAssns.map(a => a.workshop_id)
+        const workshopWideSessions = allSessions
+          .filter(s => workshopIds.includes(s.workshop_id) && (!selectedEvent || s.event_id === selectedEvent.id) && !directSessionIds.has(s.id))
+          .map(s => ({ id: 'wa_' + s.id, staff_id: staffMember?.id, session_id: s.id, moment_id: null, shift_id: null, sessions: s, open_moments: null, staff_shifts: null }))
+        return [...directSessions, ...workshopWideSessions, ...myShiftAssignments]
+      })()
+    : myShiftAssignments
+  const myGrouped = groupByDate(myAgendaAssignments)
   const myDates = Object.keys(myGrouped).sort()
 
   const card = { background: '#fff', border: '0.5px solid #e8e8e8', borderRadius: 12, padding: '14px 18px', marginBottom: 10 }
@@ -464,15 +483,66 @@ export default function StaffPage() {
       return <div style={{ textAlign: 'center', color: '#8C8C8C', padding: '48px 0', fontSize: 14 }}>Select an event to view its schedule.</div>
     }
     const eid = selectedEvent.id
+    const isStaffMode = !isVendor && scheduleViewMode === 'staff'
     const eventSessions = allSessions.filter(s => s.event_id === eid)
     const eventMoments = allMoments.filter(m => m.event_id === eid && m.moment_type !== 'amenity')
+    const eventShifts = isStaffMode ? allShifts.filter(s => s.event_id === eid) : []
     const pubAllDates = [...new Set([
       ...eventSessions.map(s => s.date),
-      ...eventMoments.map(m => m.date)
+      ...eventMoments.map(m => m.date),
+      ...eventShifts.map(s => s.shift_date)
     ].filter(Boolean))].sort()
     const datesToShow = pubDayFilter === 'all' ? pubAllDates : [pubDayFilter]
     const showWorkshops = pubTypeFilter === 'all' || pubTypeFilter === 'workshops'
     const showMoments = pubTypeFilter === 'all' || pubTypeFilter === 'moments'
+    const showShifts = isStaffMode && (pubTypeFilter === 'all' || pubTypeFilter === 'shifts')
+
+    // Looks up who's assigned to one session/moment/shift (plus workshop-wide
+    // vendor coverage for sessions) — only ever called in staff mode.
+    const getAssignedStaff = (matchFn, workshopId) => {
+      const direct = allStaffAssignments.filter(matchFn).map(a => a.staff).filter(Boolean)
+      const workshopWide = workshopId ? allWorkshopAssns.filter(a => a.workshop_id === workshopId).map(a => a.staff).filter(Boolean) : []
+      return [...direct, ...workshopWide]
+    }
+
+    // Staff-mode-only block appended to a card: who's assigned + an
+    // expandable staff notes field. Renders nothing in public mode.
+    const renderStaffModeExtras = (staffList, notes, noteKey) => {
+      if (!isStaffMode) return null
+      const notesOpen = !!expandedNotes[noteKey]
+      return (
+        <div style={{ marginTop: 10, paddingTop: 10, borderTop: '0.5px solid #F0EDE8' }}>
+          <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#8C8C8C', marginBottom: 6 }}>Assigned Staff</div>
+          {staffList.length === 0 ? (
+            <span style={{ fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 20, background: '#FFF8E8', color: '#A06000', border: '0.5px solid #F0D880' }}>
+              Unassigned
+            </span>
+          ) : (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+              {staffList.map((sm, i) => (
+                <span key={sm.id + '_' + i} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 10px', borderRadius: 20, fontSize: 12, background: '#F0EDE8', color: '#555' }}>
+                  {sm.name}
+                  {sm.is_vendor && <span style={{ fontSize: 9, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', opacity: 0.75 }}>Partner</span>}
+                </span>
+              ))}
+            </div>
+          )}
+          {notes && (
+            <div style={{ marginTop: 8 }}>
+              <button onClick={() => setExpandedNotes(n => ({ ...n, [noteKey]: !notesOpen }))}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#8C8C8C', fontSize: 12, padding: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
+                Notes {notesOpen ? '▾' : '▸'}
+              </button>
+              {notesOpen && (
+                <div style={{ fontSize: 13, color: '#8C8C8C', marginTop: 8, lineHeight: 1.55, fontStyle: 'italic', whiteSpace: 'pre-line' }}>
+                  {notes}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )
+    }
 
     const renderSessionExpansion = session => {
       const sessionRegs = registrations.filter(r => r.session_id === session.id)
@@ -510,6 +580,7 @@ export default function StaffPage() {
             </div>
           )}
           {renderGuestLookup(session.id)}
+          {renderStaffModeExtras(getAssignedStaff(a => a.session_id === session.id, session.workshop_id), session.staff_notes, 'session_' + session.id)}
         </div>
       )
     }
@@ -581,13 +652,29 @@ export default function StaffPage() {
             </button>
             {renderGuestLookup(m.id)}
           </div>
+          {renderStaffModeExtras(getAssignedStaff(a => a.moment_id === m.id), m.staff_notes, 'moment_' + m.id)}
         </div>
       )
     }
 
+    const renderShiftCard = s => (
+      <div key={s.id} style={{ background: '#fff', borderRadius: 4, border: '0.5px solid #E8E4DE', borderLeft: '3px solid #666', padding: '14px 16px', marginBottom: 10 }}>
+        <div style={{ marginBottom: 5 }}>
+          <span style={badge('#EFEDEA', '#666')}>Back of House</span>
+        </div>
+        <div style={{ fontSize: 15, fontWeight: 500, color: '#1a1a1a' }}>{s.title}</div>
+        <div style={{ fontSize: 12, color: '#8C8C8C', marginTop: 3 }}>
+          {formatTime(s.start_time)} – {formatTime(s.end_time)}
+          {s.location ? ' · 📍 ' + s.location : ''}
+        </div>
+        {renderStaffModeExtras(getAssignedStaff(a => a.shift_id === s.id), s.description, 'shift_' + s.id)}
+      </div>
+    )
+
     const renderDay = date => {
       const daySessions = eventSessions.filter(s => s.date === date)
       const dayMoments = eventMoments.filter(m => m.date === date)
+      const dayShifts = showShifts ? eventShifts.filter(s => s.shift_date === date) : []
       const workshopGroups = {}
       if (showWorkshops) {
         daySessions.forEach(s => {
@@ -598,7 +685,8 @@ export default function StaffPage() {
       }
       const dayItems = [
         ...(showWorkshops ? Object.values(workshopGroups).map(g => ({ type: 'workshop', group: g, time: g.sessions[0]?.start_time || '' })) : []),
-        ...(showMoments ? dayMoments.map(m => ({ type: m.moment_type === 'mandatory' ? 'mandatory' : 'optional', data: m, time: m.start_time || '' })) : [])
+        ...(showMoments ? dayMoments.map(m => ({ type: m.moment_type === 'mandatory' ? 'mandatory' : 'optional', data: m, time: m.start_time || '' })) : []),
+        ...dayShifts.map(s => ({ type: 'shift', data: s, time: s.start_time || '' }))
       ].sort((a, b) => (a.time || '').localeCompare(b.time || ''))
 
       if (dayItems.length === 0) return null
@@ -606,9 +694,10 @@ export default function StaffPage() {
       return (
         <div key={date}>
           <div style={dateHdr}>{formatDate(date)}</div>
-          {dayItems.map(item => item.type === 'workshop'
-            ? renderWorkshopCard(item.group)
-            : renderMomentCard(item.data, item.type === 'mandatory'))}
+          {dayItems.map(item =>
+            item.type === 'workshop' ? renderWorkshopCard(item.group) :
+            item.type === 'shift' ? renderShiftCard(item.data) :
+            renderMomentCard(item.data, item.type === 'mandatory'))}
         </div>
       )
     }
@@ -618,6 +707,22 @@ export default function StaffPage() {
 
     return (
       <div>
+        {!isVendor && (
+          <div style={{ display: 'flex', gap: 0, marginBottom: 16, border: '0.5px solid #1a1a1a', borderRadius: 8, width: 'fit-content', overflow: 'hidden' }}>
+            {[['public', 'Public View'], ['staff', 'Staff View']].map(([v, label]) => (
+              <button key={v} onClick={() => {
+                setScheduleViewMode(v)
+                if (v === 'public' && pubTypeFilter === 'shifts') setPubTypeFilter('all')
+              }} style={{
+                padding: '6px 16px', border: 'none', fontSize: 13, cursor: 'pointer',
+                background: scheduleViewMode === v ? '#1a1a1a' : '#fff',
+                color: scheduleViewMode === v ? '#fff' : '#1a1a1a',
+                fontWeight: scheduleViewMode === v ? 500 : 400
+              }}>{label}</button>
+            ))}
+          </div>
+        )}
+
         {pubAllDates.length > 0 && (
           <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
             {['all', ...pubAllDates].map(d => {
@@ -638,7 +743,7 @@ export default function StaffPage() {
         )}
 
         <div style={{ display: 'flex', gap: 6, marginBottom: 20, flexWrap: 'wrap' }}>
-          {[['all', 'All'], ['workshops', 'Workshops'], ['moments', 'Open Moments']].map(([key, label]) => {
+          {[['all', 'All'], ['workshops', 'Workshops'], ['moments', 'Open Moments'], ...(isStaffMode ? [['shifts', 'Back of House']] : [])].map(([key, label]) => {
             const active = pubTypeFilter === key
             return (
               <button key={key} onClick={() => setPubTypeFilter(key)} style={{
@@ -791,10 +896,12 @@ export default function StaffPage() {
     )
   }
 
-  // Packing List tab — read only, no checkboxes; staff-only items flagged.
+  // Packing List tab — read only, no checkboxes; excludes guests-only items,
+  // flags staff-only ones (both/staff visibility both show, matching the
+  // guest side's own guests/both split).
   function renderPackingListTab() {
     const eid = selectedEvent?.id
-    const gearForEvent = gearItems.filter(g => g.event_id === eid)
+    const gearForEvent = gearItems.filter(g => g.event_id === eid && g.visibility !== 'guests')
     const gearCats = [...new Set(gearForEvent.map(g => g.category))].sort()
     if (gearForEvent.length === 0) {
       return <div style={{ textAlign: 'center', color: '#8C8C8C', padding: '48px 0', fontSize: 14 }}>No packing list for this event yet.</div>
@@ -809,7 +916,7 @@ export default function StaffPage() {
                 <div key={item.id} style={{ padding: '10px 14px', background: '#fff', border: '0.5px solid #E8E4DE', borderRadius: 8 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <div style={{ fontSize: 14, fontWeight: 500, color: '#1a1a1a' }}>{item.name}</div>
-                    {item.is_staff_only && <span style={badge('#F5F0E8', '#A06000')}>Staff</span>}
+                    {item.visibility === 'staff' && <span style={badge('#F5F0E8', '#A06000')}>Staff</span>}
                   </div>
                   {item.description && <div style={{ fontSize: 12, color: '#8C8C8C', marginTop: 2, lineHeight: 1.4 }}>{item.description}</div>}
                   {(item.link_1_url || item.link_2_url) && (
@@ -835,111 +942,6 @@ export default function StaffPage() {
     )
   }
 
-  // Full team schedule — every session/moment/shift for the selected event
-  // with who's assigned, read only. Reached via a button under My Agenda;
-  // staff-only (vendors don't get this — see the gate on the button itself).
-  function renderTeamScheduleTab() {
-    const eid = selectedEvent?.id
-    if (!eid) {
-      return <div style={{ textAlign: 'center', color: '#8C8C8C', padding: '48px 0', fontSize: 14 }}>Select an event to view its schedule.</div>
-    }
-
-    const items = []
-    allSessions.filter(s => s.event_id === eid).forEach(s => {
-      const direct = allStaffAssignments.filter(a => a.session_id === s.id).map(a => a.staff).filter(Boolean)
-      const workshopWide = allWorkshopAssns.filter(a => a.workshop_id === s.workshop_id).map(a => a.staff).filter(Boolean)
-      items.push({
-        key: 'session_' + s.id, date: s.date, start: s.start_time,
-        time: formatTime(s.start_time) + ' – ' + formatTime(s.end_time),
-        title: s.workshops?.name || 'Workshop', location: s.workshops?.location || '',
-        type: 'Workshop', typeColor: '#2D4A2D', typeBg: '#EEF3EE',
-        notes: s.staff_notes || null,
-        staffList: [...direct, ...workshopWide]
-      })
-    })
-    allMoments.filter(m => m.event_id === eid).forEach(m => {
-      const isMand = m.moment_type === 'mandatory'
-      items.push({
-        key: 'moment_' + m.id, date: m.date, start: m.start_time,
-        time: formatTime(m.start_time) + ' – ' + formatTime(m.end_time),
-        title: m.name, location: m.location || '',
-        type: isMand ? 'Mandatory' : 'Open Moment',
-        typeColor: isMand ? '#7A5C3C' : '#B5622A',
-        typeBg: isMand ? '#F5F0E8' : '#FDF5EE',
-        notes: m.staff_notes || null,
-        staffList: allStaffAssignments.filter(a => a.moment_id === m.id).map(a => a.staff).filter(Boolean)
-      })
-    })
-    allShifts.filter(s => s.event_id === eid).forEach(s => {
-      items.push({
-        key: 'shift_' + s.id, date: s.shift_date, start: s.start_time,
-        time: formatTime(s.start_time) + ' – ' + formatTime(s.end_time),
-        title: s.title, location: s.location || '',
-        type: 'Back of House', typeColor: '#666', typeBg: '#EFEDEA',
-        notes: s.description || null,
-        staffList: allStaffAssignments.filter(a => a.shift_id === s.id).map(a => a.staff).filter(Boolean)
-      })
-    })
-
-    const byDate = {}
-    items.forEach(item => { (byDate[item.date] ||= []).push(item) })
-    const dates = Object.keys(byDate).sort()
-
-    return (
-      <div>
-        <button onClick={() => setActiveTab('agenda')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#8C8C8C', fontSize: 13, padding: 0, marginBottom: 20, display: 'flex', alignItems: 'center', gap: 6 }}>
-          ← Back to My Agenda
-        </button>
-        {dates.length === 0 ? (
-          <div style={{ textAlign: 'center', color: '#8C8C8C', padding: '48px 0', fontSize: 14 }}>No schedule items for this event.</div>
-        ) : dates.map(date => (
-          <div key={date}>
-            <div style={dateHdr}>{formatDate(date)}</div>
-            {byDate[date].sort((a, b) => (a.start || '').localeCompare(b.start || '')).map(item => {
-              const notesOpen = !!expandedNotes[item.key]
-              return (
-              <div key={item.key} style={{ ...card, borderLeft: '3px solid ' + item.typeColor }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
-                  <div style={{ fontSize: 13, color: '#8C8C8C' }}>{item.time}</div>
-                  <span style={badge(item.typeBg, item.typeColor)}>{item.type}</span>
-                </div>
-                <div style={{ fontSize: 15, fontWeight: 500, marginBottom: item.location ? 4 : 6 }}>{item.title}</div>
-                {item.location && <div style={{ fontSize: 13, color: '#8C8C8C', marginBottom: 8 }}>📍 {item.location}</div>}
-                {item.staffList.length === 0 ? (
-                  <span style={{ fontSize: 11, fontWeight: 600, padding: '3px 10px', borderRadius: 20, background: '#FFF8E8', color: '#A06000', border: '0.5px solid #F0D880' }}>
-                    Unassigned
-                  </span>
-                ) : (
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-                    {item.staffList.map((sm, i) => (
-                      <span key={sm.id + '_' + i} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 10px', borderRadius: 20, fontSize: 12, background: '#F0EDE8', color: '#555' }}>
-                        {sm.name}
-                        {sm.is_vendor && <span style={{ fontSize: 9, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', opacity: 0.75 }}>Partner</span>}
-                      </span>
-                    ))}
-                  </div>
-                )}
-                {item.notes && (
-                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: '0.5px solid #F0EDE8' }}>
-                    <button onClick={() => setExpandedNotes(n => ({ ...n, [item.key]: !notesOpen }))}
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#8C8C8C', fontSize: 12, padding: 0, display: 'flex', alignItems: 'center', gap: 4 }}>
-                      Notes {notesOpen ? '▾' : '▸'}
-                    </button>
-                    {notesOpen && (
-                      <div style={{ fontSize: 13, color: '#8C8C8C', marginTop: 8, lineHeight: 1.55, fontStyle: 'italic', whiteSpace: 'pre-line' }}>
-                        {item.notes}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-              )
-            })}
-          </div>
-        ))}
-      </div>
-    )
-  }
 
   // Instructor fallback view (read-only roster for vendor/workshop instructors)
   if (staffMember && staffRole === 'instructor') return (
@@ -1101,20 +1103,13 @@ export default function StaffPage() {
       {/* SCHEDULE — read-only public schedule for the selected event */}
       {activeTab === 'schedule' && renderPublicScheduleTab()}
 
-      {/* MY AGENDA — this staffer's own back-of-house shift coverage only */}
+      {/* MY AGENDA — back-of-house shift coverage for staff; vendors get that plus their own sessions (incl. workshop-wide coverage) */}
       {activeTab === 'agenda' && (
         <div>
-          {!isVendor && (
-            <button onClick={() => setActiveTab('teamSchedule')} style={{
-              display: 'inline-flex', alignItems: 'center', gap: 5, marginBottom: 16,
-              padding: '5px 12px', borderRadius: 20, border: '0.5px solid #d0d0d0',
-              background: '#fff', color: '#555', fontSize: 12, cursor: 'pointer'
-            }}>
-              View full schedule with staff assignments →
-            </button>
-          )}
           {myDates.length === 0 && (
-            <div style={{ textAlign: 'center', color: '#8C8C8C', padding: '48px 0', fontSize: 14 }}>No shifts assigned yet.</div>
+            <div style={{ textAlign: 'center', color: '#8C8C8C', padding: '48px 0', fontSize: 14 }}>
+              {isVendor ? 'Nothing assigned yet.' : 'No shifts assigned yet.'}
+            </div>
           )}
           {myDates.length > 0 && (
             <div style={{ display: 'flex', gap: 6, marginBottom: 20, flexWrap: 'wrap' }}>
@@ -1139,17 +1134,55 @@ export default function StaffPage() {
               <div style={dateHdr}>{formatDate(date)}</div>
               {myGrouped[date].map(a => {
                 const info = a._info
+                const sessionRegs = info.sessionId ? registrations.filter(r => r.session_id === info.sessionId) : []
+                const totalGuests = sessionRegs.reduce((s, r) => s + (r.party_size || 1), 0)
+                const isExpanded = expandedRosters[a.id]
+                const lookupOpen = activeGuestLookup === a.id
                 return (
-                  <div key={a.id} style={{ ...card, background: '#F5F4F1', borderLeft: '3px solid #C8C4BC' }}>
+                  <div key={a.id} style={{
+                    ...card,
+                    background: info.sessionId ? '#fff' : '#F5F4F1',
+                    borderLeft: '3px solid ' + (info.sessionId ? info.typeColor : '#C8C4BC')
+                  }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
                       <div style={{ fontSize: 13, color: '#8C8C8C', fontWeight: 500 }}>{info.time}</div>
-                      <span style={badge('#E8E4DE', '#888')}>{info.type}</span>
+                      <span style={badge(info.sessionId ? info.typeBg : '#E8E4DE', info.sessionId ? info.typeColor : '#888')}>{info.type}</span>
                     </div>
                     <div style={{ fontSize: 15, fontWeight: 500, marginBottom: info.location ? 4 : 0 }}>{info.title}</div>
                     {info.location && <div style={{ fontSize: 13, color: '#8C8C8C' }}>📍 {info.location}</div>}
                     {info.activityNotes && (
                       <div style={{ fontSize: 13, color: '#8C8C8C', marginTop: 8, paddingTop: 8, borderTop: '0.5px solid #F0EDE8', lineHeight: 1.55, fontStyle: 'italic' }}>
                         {info.activityNotes}
+                      </div>
+                    )}
+                    {info.sessionId && (
+                      <div style={{ marginTop: 10, paddingTop: 10, borderTop: '0.5px solid #F0EDE8' }}>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: 13, color: '#555', flexGrow: 1 }}>
+                            {totalGuests}{info.capacity ? ' / ' + info.capacity : ''} registered
+                          </span>
+                          <button onClick={() => setExpandedRosters(r => ({ ...r, [a.id]: !isExpanded }))}
+                            style={{ ...btn('#fff'), fontSize: 12, padding: '4px 12px' }}>
+                            {isExpanded ? 'Hide roster' : 'View roster'}
+                          </button>
+                          <button onClick={() => toggleLookup(a.id)}
+                            style={{ ...btn(lookupOpen ? '#1a1a1a' : '#fff', lookupOpen ? '#fff' : '#1a1a1a'), fontSize: 12, padding: '4px 12px' }}>
+                            Guest Lookup
+                          </button>
+                        </div>
+                        {isExpanded && (
+                          <div style={{ marginTop: 10 }}>
+                            {sessionRegs.length === 0
+                              ? <div style={{ fontSize: 13, color: '#aaa' }}>No registrations yet.</div>
+                              : sessionRegs.map(r => (
+                                <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 10px', background: '#F7F6F4', borderRadius: 8, fontSize: 13, marginBottom: 4 }}>
+                                  <span>{r.guests?.name}</span>
+                                  {r.party_size > 1 && <span style={{ color: '#8C8C8C' }}>party of {r.party_size}</span>}
+                                </div>
+                              ))}
+                          </div>
+                        )}
+                        {renderGuestLookup(a.id)}
                       </div>
                     )}
                   </div>
@@ -1159,9 +1192,6 @@ export default function StaffPage() {
           ))}
         </div>
       )}
-
-      {/* TEAM SCHEDULE — full schedule with who's assigned, staff-only (not in the main tab bar, reached via the button above) */}
-      {activeTab === 'teamSchedule' && !isVendor && renderTeamScheduleTab()}
 
       {/* SITE */}
       {activeTab === 'site' && renderSiteTab()}

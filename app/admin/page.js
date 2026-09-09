@@ -150,7 +150,7 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
   const [gearItems, setGearItems] = useState([])
   const [gearCategories, setGearCategories] = useState([]) // { event_id, name, sort_order } — controls gear list section order
   const [reorderingGearCat, setReorderingGearCat] = useState(null)
-  const [newGearItem, setNewGearItem] = useState({ name: '', category: '', description: '', link_1_label: '', link_1_url: '', link_2_label: '', link_2_url: '', is_available_to_rent: false, is_staff_only: false, sort_order: 0 })
+  const [newGearItem, setNewGearItem] = useState({ name: '', category: '', description: '', link_1_label: '', link_1_url: '', link_2_label: '', link_2_url: '', is_available_to_rent: false, visibility: 'both', sort_order: 0 })
   const [gearMsg, setGearMsg] = useState(null)
   const [addingGear, setAddingGear] = useState(false)
   const [editingGearItem, setEditingGearItem] = useState(null)
@@ -884,12 +884,12 @@ const filteredGuests = guests.filter(g => {
       link_2_label: newGearItem.link_2_label || null,
       link_2_url: newGearItem.link_2_url || null,
       is_available_to_rent: newGearItem.is_available_to_rent,
-      is_staff_only: newGearItem.is_staff_only,
+      visibility: newGearItem.visibility,
       sort_order: parseInt(newGearItem.sort_order) || 0
     })
     if (!error) {
       setGearMsg({ type: 'success', text: 'Item added.' })
-      setNewGearItem({ name: '', category: '', description: '', link_1_label: '', link_1_url: '', link_2_label: '', link_2_url: '', is_available_to_rent: false, is_staff_only: false, sort_order: 0 })
+      setNewGearItem({ name: '', category: '', description: '', link_1_label: '', link_1_url: '', link_2_label: '', link_2_url: '', is_available_to_rent: false, visibility: 'both', sort_order: 0 })
       await loadAll()
     } else {
       setGearMsg({ type: 'error', text: 'Could not add item.' })
@@ -918,7 +918,7 @@ const filteredGuests = guests.filter(g => {
       link_2_label: editGearData.link_2_label || null,
       link_2_url: editGearData.link_2_url || null,
       is_available_to_rent: editGearData.is_available_to_rent,
-      is_staff_only: editGearData.is_staff_only,
+      visibility: editGearData.visibility,
       sort_order: parseInt(editGearData.sort_order) || 0
     }).eq('id', editingGearItem.id)
     if (!error) {
@@ -1316,7 +1316,7 @@ const filteredGuests = guests.filter(g => {
           link_2_label: g.link_2_label,
           link_2_url: g.link_2_url,
           is_available_to_rent: g.is_available_to_rent,
-          is_staff_only: g.is_staff_only,
+          visibility: g.visibility,
           sort_order: g.sort_order
         }))))
       }
@@ -2616,13 +2616,22 @@ const filteredGuests = guests.filter(g => {
                 <input type="checkbox" checked={newGearItem.is_available_to_rent} onChange={e => setNewGearItem(g => ({ ...g, is_available_to_rent: e.target.checked }))} style={{ cursor: 'pointer' }} />
                 Available to rent
               </label>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, cursor: 'pointer' }}>
-                <input type="checkbox" checked={newGearItem.is_staff_only} onChange={e => setNewGearItem(g => ({ ...g, is_staff_only: e.target.checked }))} style={{ cursor: 'pointer' }} />
-                Staff only
-              </label>
               <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                 <label style={lbl} htmlFor="gear-sort">Sort order</label>
                 <input id="gear-sort" type="number" value={newGearItem.sort_order} onChange={e => setNewGearItem(g => ({ ...g, sort_order: e.target.value }))} style={{ ...inp, width: 70, marginBottom: 0 }} />
+              </div>
+            </div>
+            <div style={fw}>
+              <label style={lbl}>Visible to</label>
+              <div style={{ display: 'flex', gap: 6 }}>
+                {[['both', 'Staff & Guests'], ['guests', 'Guests Only'], ['staff', 'Staff Only']].map(([v, label]) => (
+                  <button key={v} type="button" onClick={() => setNewGearItem(g => ({ ...g, visibility: v }))} style={{
+                    padding: '6px 12px', borderRadius: 8, border: '0.5px solid', cursor: 'pointer', fontSize: 12,
+                    borderColor: newGearItem.visibility === v ? '#1a1a1a' : '#d0d0d0',
+                    background: newGearItem.visibility === v ? '#1a1a1a' : '#fff',
+                    color: newGearItem.visibility === v ? '#fff' : '#555'
+                  }}>{label}</button>
+                ))}
               </div>
             </div>
             <button onClick={addGearItem} disabled={addingGear} style={{ ...btn('#1a1a1a', '#fff'), width: '100%', padding: '10px' }}>
@@ -2739,13 +2748,22 @@ const filteredGuests = guests.filter(g => {
                             <input type="checkbox" checked={!!editGearData.is_available_to_rent} onChange={e => setEditGearData(d => ({ ...d, is_available_to_rent: e.target.checked }))} style={{ cursor: 'pointer' }} />
                             Available to rent
                           </label>
-                          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
-                            <input type="checkbox" checked={!!editGearData.is_staff_only} onChange={e => setEditGearData(d => ({ ...d, is_staff_only: e.target.checked }))} style={{ cursor: 'pointer' }} />
-                            Staff only
-                          </label>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                             <label style={{ ...lbl, marginBottom: 0 }}>Sort</label>
                             <input type="number" value={editGearData.sort_order ?? 0} onChange={e => setEditGearData(d => ({ ...d, sort_order: e.target.value }))} style={{ ...inp, width: 60 }} />
+                          </div>
+                        </div>
+                        <div style={{ marginBottom: 12 }}>
+                          <label style={lbl}>Visible to</label>
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            {[['both', 'Staff & Guests'], ['guests', 'Guests Only'], ['staff', 'Staff Only']].map(([v, label]) => (
+                              <button key={v} type="button" onClick={() => setEditGearData(d => ({ ...d, visibility: v }))} style={{
+                                padding: '6px 12px', borderRadius: 8, border: '0.5px solid', cursor: 'pointer', fontSize: 12,
+                                borderColor: editGearData.visibility === v ? '#1a1a1a' : '#d0d0d0',
+                                background: editGearData.visibility === v ? '#1a1a1a' : '#fff',
+                                color: editGearData.visibility === v ? '#fff' : '#555'
+                              }}>{label}</button>
+                            ))}
                           </div>
                         </div>
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -2759,7 +2777,8 @@ const filteredGuests = guests.filter(g => {
                           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 2 }}>
                             <div style={{ fontSize: 14, fontWeight: 500 }}>{gi.name}</div>
                             {gi.is_available_to_rent && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, background: '#fff8ec', color: '#9a5a18', border: '0.5px solid #e8c080' }}>Rentable</span>}
-                            {gi.is_staff_only && <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', padding: '2px 7px', borderRadius: 10, background: '#F5F0E8', color: '#A06000', border: '0.5px solid #E8C080' }}>Staff Only</span>}
+                            {gi.visibility === 'staff' && <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', padding: '2px 7px', borderRadius: 10, background: '#F5F0E8', color: '#A06000', border: '0.5px solid #E8C080' }}>Staff Only</span>}
+                            {gi.visibility === 'guests' && <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', padding: '2px 7px', borderRadius: 10, background: '#EEF3EE', color: '#2D4A2D', border: '0.5px solid #C0D4C0' }}>Guests Only</span>}
                           </div>
                           {gi.description && <div style={{ fontSize: 12, color: '#aaa' }}>{gi.description}</div>}
                           {(gi.link_1_url || gi.link_2_url) && (
@@ -2770,7 +2789,7 @@ const filteredGuests = guests.filter(g => {
                           )}
                         </div>
                         <div style={{ display: 'flex', gap: 6, flexShrink: 0, flexWrap: 'wrap' }}>
-                          <button onClick={() => { setEditingGearItem(gi); setEditGearData({ name: gi.name, category: gi.category, description: gi.description || '', link_1_label: gi.link_1_label || '', link_1_url: gi.link_1_url || '', link_2_label: gi.link_2_label || '', link_2_url: gi.link_2_url || '', is_available_to_rent: gi.is_available_to_rent, is_staff_only: gi.is_staff_only, sort_order: gi.sort_order }); setGearMsg(null) }} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px' }}>Edit</button>
+                          <button onClick={() => { setEditingGearItem(gi); setEditGearData({ name: gi.name, category: gi.category, description: gi.description || '', link_1_label: gi.link_1_label || '', link_1_url: gi.link_1_url || '', link_2_label: gi.link_2_label || '', link_2_url: gi.link_2_url || '', is_available_to_rent: gi.is_available_to_rent, visibility: gi.visibility || 'both', sort_order: gi.sort_order }); setGearMsg(null) }} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px' }}>Edit</button>
                           {!deleteConfirm['gear_' + gi.id] ? (
                             <button onClick={() => deleteGearItem(gi.id)} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px', color: '#c0392b', borderColor: '#f5c0c0' }}>Delete</button>
                           ) : (
