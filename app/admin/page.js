@@ -103,6 +103,10 @@ export default function AdminPage() {
   const [newCreditNotes, setNewCreditNotes] = useState('')
   const [newBookingSummary, setNewBookingSummary] = useState('')
   const [creditsMsg, setCreditsMsg] = useState(null)
+  const [editingGuestTicket, setEditingGuestTicket] = useState(null) // guest id
+  const [editGuestTicketTypeId, setEditGuestTicketTypeId] = useState('')
+  const [guestTicketMsg, setGuestTicketMsg] = useState(null)
+  const [savingGuestTicket, setSavingGuestTicket] = useState(false)
 
   const [activityType, setActivityType] = useState('workshop') // 'workshop' | 'moment' — unified Program add form
   const [newWorkshop, setNewWorkshop] = useState({ name: '', category: '', instructor: '', description: '', location: '', max_per_guest: 1, date: '', start_time: '', end_time: '', capacity: 30 })
@@ -183,6 +187,7 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
   const [assignTypeFilter, setAssignTypeFilter] = useState('all')
   const [assignUnassignedOnly, setAssignUnassignedOnly] = useState(false)
   const [assignmentsView, setAssignmentsView] = useState('activity') // 'activity' | 'staff'
+  const [assignConflictsOnly, setAssignConflictsOnly] = useState(false) // By Staff view only
   const [addingShiftInline, setAddingShiftInline] = useState(false)
   const [newInlineShift, setNewInlineShift] = useState({ title: '', date: '', start_time: '', end_time: '', location: '', description: '' })
   const [inlineShiftMsg, setInlineShiftMsg] = useState(null)
@@ -625,6 +630,20 @@ const filteredGuests = guests.filter(g => {
     await supabase.from('guests').delete().eq('id', id)
     setDeleteConfirm(d => { const n = { ...d }; delete n[id]; return n })
     await loadAll()
+  }
+
+  async function updateGuestTicketType() {
+    if (!editingGuestTicket || !editGuestTicketTypeId) return
+    setSavingGuestTicket(true)
+    const { error } = await supabase.from('guests').update({ ticket_type_id: editGuestTicketTypeId }).eq('id', editingGuestTicket)
+    if (!error) {
+      setEditingGuestTicket(null)
+      setGuestTicketMsg(null)
+      await loadAll()
+    } else {
+      setGuestTicketMsg({ type: 'error', text: 'Could not update ticket type.' })
+    }
+    setSavingGuestTicket(false)
   }
 
   async function saveCredits(guest) {
@@ -1571,8 +1590,26 @@ const filteredGuests = guests.filter(g => {
     await loadAll()
   }
 
-  async function removeStaffEventAssn(id) {
+  // Removing someone from an event should also clear whatever they were
+  // assigned to *within* that event — otherwise they keep showing up on
+  // sessions/moments/shifts (and workshop-wide vendor coverage) there even
+  // though they've been taken off the event itself.
+  async function removeStaffEventAssn(assnRow) {
+    const { id, staff_id: staffId, event_id: eventId } = assnRow
     await supabase.from('staff_event_assignments').delete().eq('id', id)
+
+    const sessionIds = sessions.filter(s => s.event_id === eventId).map(s => s.id)
+    const momentIds = openMoments.filter(m => m.event_id === eventId).map(m => m.id)
+    const shiftIds = staffShifts.filter(s => s.event_id === eventId).map(s => s.id)
+    const workshopIds = [...new Set(sessions.filter(s => s.event_id === eventId).map(s => s.workshop_id).filter(Boolean))]
+
+    await Promise.all([
+      sessionIds.length > 0 ? supabase.from('staff_assignments').delete().eq('staff_id', staffId).in('session_id', sessionIds) : null,
+      momentIds.length > 0 ? supabase.from('staff_assignments').delete().eq('staff_id', staffId).in('moment_id', momentIds) : null,
+      shiftIds.length > 0 ? supabase.from('staff_assignments').delete().eq('staff_id', staffId).in('shift_id', shiftIds) : null,
+      workshopIds.length > 0 ? supabase.from('staff_workshop_assignments').delete().eq('staff_id', staffId).in('workshop_id', workshopIds) : null,
+    ].filter(Boolean))
+
     await loadAll()
   }
 
@@ -2017,6 +2054,9 @@ const filteredGuests = guests.filter(g => {
                         ) : (
                           <span style={{ fontSize: 11, padding: '4px 10px', color: '#aaa' }}>Not open yet</span>
                         )}
+                        <button onClick={() => { setEditingGuestTicket(guest.id); setEditGuestTicketTypeId(guest.ticket_type_id || ''); setGuestTicketMsg(null) }} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px' }}>
+                          Ticket type
+                        </button>
                         <button onClick={() => { setAdjustingGuest(guest); setNewCreditsAvail(total); setNewCreditNotes(guestEvent?.credit_notes || ''); setNewBookingSummary(guestEvent?.booking_summary || ''); setCreditsMsg(null) }} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px' }}>
                           Credits
                         </button>
@@ -2034,6 +2074,25 @@ const filteredGuests = guests.filter(g => {
                         )}
                       </div>
                     </div>
+                    {editingGuestTicket === guest.id && (
+                      <div style={{ marginTop: 12, padding: 12, background: '#f9f9f9', borderRadius: 8 }}>
+                        <div style={{ fontSize: 13, marginBottom: 10 }}>Change ticket type for {guest.name}</div>
+                        <Msg msg={guestTicketMsg} />
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <select value={editGuestTicketTypeId} onChange={e => setEditGuestTicketTypeId(e.target.value)} style={{ ...inp, width: 'auto', minWidth: 220, marginBottom: 0 }}>
+                            <option value="">Select...</option>
+                            {ticketTypes.map(tt => <option key={tt.id} value={tt.id}>{tt.name} · party of {tt.party_cap} · {tt.credits_per_person * tt.party_cap} credits</option>)}
+                          </select>
+                          <button onClick={updateGuestTicketType} disabled={savingGuestTicket || !editGuestTicketTypeId} style={btn('#1a1a1a', '#fff')}>
+                            {savingGuestTicket ? 'Saving...' : 'Save'}
+                          </button>
+                          <button onClick={() => { setEditingGuestTicket(null); setGuestTicketMsg(null) }} style={btn('#fff')}>Cancel</button>
+                        </div>
+                        <div style={{ fontSize: 11, color: '#aaa', marginTop: 8 }}>
+                          Changing this changes their default credit total ({total} credits currently) — use "Credits" instead if you just want a one-off override for this event.
+                        </div>
+                      </div>
+                    )}
                     {adjustingGuest?.id === guest.id && (
                       <div style={{ marginTop: 12, padding: 12, background: '#f9f9f9', borderRadius: 8 }}>
                         <div style={{ fontSize: 13, marginBottom: 10 }}>Set available credits for {guest.name} at {selectedEvent?.name}</div>
@@ -3398,6 +3457,12 @@ const filteredGuests = guests.filter(g => {
                   <input type="checkbox" checked={assignUnassignedOnly} onChange={e => setAssignUnassignedOnly(e.target.checked)} />
                   {assignmentsView === 'staff' ? 'Staff with nothing scheduled only' : 'Unassigned only'}
                 </label>
+                {assignmentsView === 'staff' && (
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#c0392b', cursor: 'pointer' }}>
+                    <input type="checkbox" checked={assignConflictsOnly} onChange={e => setAssignConflictsOnly(e.target.checked)} />
+                    Conflicts only
+                  </label>
+                )}
               </div>
 
               {(() => {
@@ -3712,31 +3777,62 @@ const filteredGuests = guests.filter(g => {
                     )
                     let items = [...direct, ...workshopWide].sort((a, b) => (a.date + 'T' + a.start_time) < (b.date + 'T' + b.start_time) ? -1 : 1)
                     if (assignDateFilter) items = items.filter(i => i.date === assignDateFilter)
-                    return { staff: sm, items }
+                    // Flag items that overlap another on this person's own list —
+                    // catches double-bookings already in the data (e.g. from a
+                    // rescheduled item or a bulk "Add all"), not just ones caught
+                    // at assign-time by getStaffConflicts above. Shift-vs-shift
+                    // overlap is excluded: back-of-house shifts are deliberately
+                    // broad windows (a 5-hour "Guest Services" block is expected
+                    // to contain a "Lunch" shift) and flagging those would just
+                    // be noise — only a Workshop or Open Moment on one side is a
+                    // real, guest-facing time conflict.
+                    const conflictIdx = new Set()
+                    for (let i = 0; i < items.length; i++) {
+                      for (let j = i + 1; j < items.length; j++) {
+                        const a = items[i], b = items[j]
+                        const involvesFixedCommitment = a.type !== 'shift' || b.type !== 'shift'
+                        if (involvesFixedCommitment && a.date === b.date && a.start_time < b.end_time && b.start_time < a.end_time) {
+                          conflictIdx.add(i); conflictIdx.add(j)
+                        }
+                      }
+                    }
+                    return { staff: sm, items, conflictCount: conflictIdx.size, conflictIdx }
                   })
-                  const visibleRows = assignUnassignedOnly ? staffRows.filter(r => r.items.length === 0) : staffRows
+                  let visibleRows = assignUnassignedOnly ? staffRows.filter(r => r.items.length === 0) : staffRows
+                  if (assignConflictsOnly) visibleRows = visibleRows.filter(r => r.conflictCount > 0)
 
                   return (
                     <div>
                       {dayFilterPills}
                       {visibleRows.length === 0 ? (
                         <div style={{ fontSize: 13, color: '#aaa' }}>No staff match the current filters.</div>
-                      ) : visibleRows.map(({ staff: sm, items }) => (
+                      ) : visibleRows.map(({ staff: sm, items, conflictCount, conflictIdx }) => (
                         <div key={sm.id} style={{ ...card, marginBottom: 10 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: items.length ? 10 : 0, flexWrap: 'wrap' }}>
                             <div style={{ fontSize: 14, fontWeight: 600 }}>{sm.name}</div>
                             {sm.is_vendor && <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 10, background: '#FFF8E8', color: '#9a5a18', border: '0.5px solid #e8c080' }}>Vendor</span>}
                             {sm.role && <span style={{ fontSize: 12, color: '#aaa' }}>{sm.role}</span>}
+                            {conflictCount > 0 && (
+                              <span style={{ fontSize: 10, fontWeight: 600, padding: '2px 8px', borderRadius: 10, background: '#FCEBEA', color: '#c0392b', border: '0.5px solid #F0B8B0' }}>
+                                ⚠ {conflictCount} conflict{conflictCount !== 1 ? 's' : ''}
+                              </span>
+                            )}
                             <span style={{ fontSize: 11, color: '#aaa', marginLeft: 'auto' }}>{items.length} item{items.length !== 1 ? 's' : ''}</span>
                           </div>
                           {items.length === 0 ? (
                             <div style={{ fontSize: 12, color: '#c99', fontStyle: 'italic' }}>Nothing scheduled{assignDateFilter ? ' on this day' : ''}.</div>
                           ) : (
                             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                              {items.map(item => {
+                              {items.map((item, i) => {
                                 const badge = typeBadge[item.type]
+                                const hasConflict = conflictIdx.has(i)
                                 return (
-                                  <div key={item.type + '_' + item.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', background: '#FAFAF8', borderRadius: 6, flexWrap: 'wrap' }}>
+                                  <div key={item.type + '_' + item.id} style={{
+                                    display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderRadius: 6, flexWrap: 'wrap',
+                                    background: hasConflict ? '#FCEBEA' : '#FAFAF8',
+                                    border: hasConflict ? '0.5px solid #F0B8B0' : 'none'
+                                  }}>
+                                    {hasConflict && <span title="Overlaps another item below" style={{ fontSize: 12 }}>⚠</span>}
                                     <span style={{ fontSize: 11, color: '#888', minWidth: 150 }}>
                                       {new Date(item.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} · {formatTime(item.start_time)}–{formatTime(item.end_time)}
                                     </span>
@@ -3885,7 +3981,7 @@ const filteredGuests = guests.filter(g => {
                       {memberEventAssns.map(a => (
                         <span key={a.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 8px', borderRadius: 20, background: '#EEF3EE', color: '#2D4A2D', fontSize: 12 }}>
                           {a.events?.name}
-                          <button onClick={() => removeStaffEventAssn(a.id)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#2D4A2D', padding: 0, fontSize: 13, lineHeight: 1 }}>×</button>
+                          <button onClick={() => removeStaffEventAssn(a)} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#2D4A2D', padding: 0, fontSize: 13, lineHeight: 1 }}>×</button>
                         </span>
                       ))}
                       <select value="" onChange={e => e.target.value && addStaffEventAssn(sm.id, e.target.value)}
