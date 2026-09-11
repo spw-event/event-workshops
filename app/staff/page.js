@@ -477,7 +477,7 @@ export default function StaffPage() {
   // Read-only reference view of the full public schedule for the selected event —
   // same visual layout as the guest Schedule tab (day/type pills, workshop cards
   // with time-slot pills, open moment cards), but with guest count/roster in place
-  // of reserve/waitlist controls, and no party size or credits UI.
+  // of reserve controls, and no party size or credits UI.
   function renderPublicScheduleTab() {
     if (!selectedEvent) {
       return <div style={{ textAlign: 'center', color: '#8C8C8C', padding: '48px 0', fontSize: 14 }}>Select an event to view its schedule.</div>

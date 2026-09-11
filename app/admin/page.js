@@ -1702,7 +1702,6 @@ const filteredGuests = guests.filter(g => {
         <div style={{ fontSize: 13, color: '#888', marginBottom: 24 }}>{instructorWorkshop?.instructor}</div>
         {mySessions.map(session => {
           const confirmed = registrations.filter(r => r.session_id === session.id && r.status === 'confirmed')
-          const waitlisted = registrations.filter(r => r.session_id === session.id && r.status === 'waitlisted')
           const enrolled = confirmed.reduce((s, r) => s + (r.party_size || 1), 0)
           return (
             <div key={session.id} style={card}>
@@ -1720,15 +1719,6 @@ const filteredGuests = guests.filter(g => {
                       {r.party_size > 1 && <span style={{ color: '#888' }}>party of {r.party_size}</span>}
                     </div>
                   ))}
-                  {waitlisted.length > 0 && <>
-                    <div style={{ fontSize: 11, color: '#aaa', marginTop: 6, marginBottom: 2 }}>Waitlist</div>
-                    {waitlisted.map(r => (
-                      <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 10px', background: '#fffbea', borderRadius: 6, fontSize: 13 }}>
-                        <span>{r.guests?.name}</span>
-                        {r.party_size > 1 && <span style={{ color: '#888' }}>party of {r.party_size}</span>}
-                      </div>
-                    ))}
-                  </>}
                 </div>
               )}
             </div>

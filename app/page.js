@@ -897,29 +897,30 @@ export default function Home() {
     const avail = sessionAvailability[session.id] || 0
 
     if (avail < partySize) {
-      const { error: wlError } = await supabase
-        .from('registrations')
-        .insert({ guest_id: guest.id, session_id: session.id, event_id: selectedEvent.id, status: 'waitlisted', party_size: partySize })
-      if (!wlError) {
-        setMessage({ type: 'warning', text: 'Not enough spots for your group — added to waitlist.' })
-        await refreshAll()
-      }
+      setMessage({ type: 'error', text: 'Not enough spots remaining for your group.' })
+      setRegistering(null)
+      return
+    }
+
+    const { error: regError } = await supabase
+      .from('registrations')
+      .insert({ guest_id: guest.id, session_id: session.id, event_id: selectedEvent.id, status: 'confirmed', party_size: partySize })
+    if (!regError) {
+      // Update credits in guest_events
+      await supabase
+        .from('guest_events')
+        .update({ credits_used: partyCreditsUsed + partySize })
+        .eq('guest_id', guest.id)
+        .eq('event_id', selectedEvent.id)
+      setMessage({ type: 'success', text: 'Reserved ' + partySize + ' spot' + (partySize > 1 ? 's' : '') + ' successfully.' })
+      await refreshAll()
+    } else if (regError.message?.includes('SESSION_FULL')) {
+      // Someone else took the remaining spot(s) between our last refresh and
+      // this click — the database's own capacity check caught it.
+      setMessage({ type: 'error', text: 'That spot was just taken by someone else — please choose another time.' })
+      await refreshAll()
     } else {
-      const { error: regError } = await supabase
-        .from('registrations')
-        .insert({ guest_id: guest.id, session_id: session.id, event_id: selectedEvent.id, status: 'confirmed', party_size: partySize })
-      if (!regError) {
-        // Update credits in guest_events
-        await supabase
-          .from('guest_events')
-          .update({ credits_used: partyCreditsUsed + partySize })
-          .eq('guest_id', guest.id)
-          .eq('event_id', selectedEvent.id)
-        setMessage({ type: 'success', text: 'Reserved ' + partySize + ' spot' + (partySize > 1 ? 's' : '') + ' successfully.' })
-        await refreshAll()
-      } else {
-        setMessage({ type: 'error', text: 'Could not register. Please try again.' })
-      }
+      setMessage({ type: 'error', text: 'Could not register. Please try again.' })
     }
     setRegistering(null)
   }
@@ -949,25 +950,6 @@ export default function Home() {
       .update({ credits_used: Math.max(0, partyCreditsUsed - creditRefund) })
       .eq('guest_id', guest.id)
       .eq('event_id', selectedEvent.id)
-
-    // Promote waitlisted
-    const { data: waitlisted } = await supabase
-      .from('registrations')
-      .select('*')
-      .eq('session_id', sessionId)
-      .eq('status', 'waitlisted')
-      .order('registered_at', { ascending: true })
-      .limit(1)
-
-    if (waitlisted && waitlisted.length > 0) {
-      const newAvail = (sessionAvailability[sessionId] || 0) + creditRefund
-      if (newAvail >= (waitlisted[0].party_size || 1)) {
-        await supabase
-          .from('registrations')
-          .update({ status: 'confirmed' })
-          .eq('id', waitlisted[0].id)
-      }
-    }
 
     setMessage({ type: 'success', text: 'Spot released. ' + creditRefund + ' credit' + (creditRefund > 1 ? 's' : '') + ' returned.' })
     await refreshAll()
@@ -1083,10 +1065,6 @@ export default function Home() {
 
   function isRegistered(sessionId) {
     return registrations.some(r => r.session_id === sessionId && r.status === 'confirmed')
-  }
-
-  function isWaitlisted(sessionId) {
-    return registrations.some(r => r.session_id === sessionId && r.status === 'waitlisted')
   }
 
   function getReg(sessionId) {
@@ -1475,14 +1453,13 @@ export default function Home() {
               const showWorkshops = registrationOpen && (scheduleTypeFilter === 'all' || scheduleTypeFilter === 'workshops')
               const showMoments = scheduleTypeFilter === 'all' || scheduleTypeFilter === 'moments'
 
-              /* ── Reserve / waitlist / cancel panel below an expanded time slot pill ── */
+              /* ── Reserve / cancel panel below an expanded time slot pill ── */
               const renderSessionExpansion = session => {
                 const registered = isRegistered(session.id)
-                const waitlisted = isWaitlisted(session.id)
                 const reg = getReg(session.id)
                 const avail = sessionAvailability[session.id] ?? session.capacity
-                const isFull = avail === 0 && !registered && !waitlisted
-                const canRegister = registrationOpen && creditsRemaining > 0 && !isOffline
+                const isFull = avail === 0 && !registered
+                const canRegister = registrationOpen && creditsRemaining > 0 && !isOffline && !isFull
                 const timeRange = (
                   <div style={{ fontSize: 14, fontWeight: 600, color: '#1a1a1a', marginBottom: 10 }}>
                     {formatTime(session.start_time)} – {formatTime(session.end_time)}
@@ -1506,18 +1483,6 @@ export default function Home() {
                             <button onClick={() => cancel(reg.id, session.id, reg?.party_size)} style={{ fontSize: 11, padding: '5px 10px', cursor: 'pointer', border: '0.5px solid #E8E4DE', borderRadius: 4, background: '#fff', color: '#8C8C8C' }}>Release spot</button>
                           </>
                         )}
-                      </div>
-                    </div>
-                  )
-                }
-
-                if (waitlisted) {
-                  return (
-                    <div style={{ marginTop: 12, paddingTop: 12, borderTop: '0.5px solid #E8E4DE' }}>
-                      {timeRange}
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                        <div style={{ fontSize: 12, color: '#8C8C8C', flex: 1 }}>On the list — we&rsquo;ll notify you if a spot opens</div>
-                        <button onClick={() => cancel(reg.id, session.id, reg?.party_size)} style={{ fontSize: 11, padding: '5px 10px', cursor: 'pointer', border: '0.5px solid #E8E4DE', borderRadius: 4, background: '#fff', color: '#8C8C8C' }}>Leave list</button>
                       </div>
                     </div>
                   )
@@ -1564,8 +1529,8 @@ export default function Home() {
                       {registering === session.id ? '...' :
                        isOffline ? 'Offline' :
                        !registrationOpen ? 'Not open yet' :
-                       creditsRemaining <= 0 ? 'Credits used' :
-                       isFull ? 'Join waitlist' : 'Reserve'}
+                       isFull ? 'Full' :
+                       creditsRemaining <= 0 ? 'Credits used' : 'Reserve'}
                     </button>
                   </div>
                 )
@@ -1574,15 +1539,12 @@ export default function Home() {
               /* ── One time slot pill ── */
               const renderTimeSlotPill = session => {
                 const registered = isRegistered(session.id)
-                const waitlisted = isWaitlisted(session.id)
                 const avail = sessionAvailability[session.id] ?? session.capacity
-                const isFull = avail === 0 && !registered && !waitlisted
+                const isFull = avail === 0 && !registered
                 const isExpanded = expandedSessionId === session.id
 
                 const pillStyle = registered
                   ? { background: '#2D4A2D', border: '0.5px solid #2D4A2D', color: '#fff' }
-                  : waitlisted
-                  ? { background: '#F5E4CC', border: '0.5px solid #E8D8BC', color: '#5C3D1E' }
                   : isFull
                   ? { background: '#F0EDEA', border: '0.5px solid #E8E4DE', color: '#8C8C8C' }
                   : { background: '#fff', border: '0.5px solid #1a1a1a', color: '#1a1a1a' }
@@ -1594,7 +1556,7 @@ export default function Home() {
                     ...pillStyle,
                     outline: isExpanded ? '2px solid #1a1a1a' : 'none', outlineOffset: 1
                   }}>
-                    {isFull ? 'Full' : (registered ? '✓ ' : '') + formatTime(session.start_time) + ' – ' + formatTime(session.end_time)}
+                    {(isFull ? 'Full · ' : registered ? '✓ ' : '') + formatTime(session.start_time) + ' – ' + formatTime(session.end_time)}
                   </button>
                 )
               }
