@@ -27,6 +27,8 @@ export default function StaffPage() {
   const [gearItems, setGearItems] = useState([])
   const [registrations, setRegistrations] = useState([])
   const [guestEvents, setGuestEvents] = useState([])
+  const [guests, setGuests] = useState([]) // Check-In tab only (Guest Services staff)
+  const [checkinSearch, setCheckinSearch] = useState('')
   const [events, setEvents] = useState([])
   const [selectedEvent, setSelectedEvent] = useState(null)
   const [eventsWithAssignments, setEventsWithAssignments] = useState([])
@@ -95,6 +97,7 @@ export default function StaffPage() {
       }
       setStaffMember(record)
       setStaffRole('staff')
+      if (record.is_checkin) setActiveTab('checkin')
       loadData(record).then(() => { setLoading(false); setCheckingStoredPin(false) })
     } else {
       setStaffMember(record)
@@ -125,6 +128,7 @@ export default function StaffPage() {
       persistStaffAuth(staffData, role)
       setStaffMember(staffData)
       setStaffRole('staff')
+      if (staffData.is_checkin) setActiveTab('checkin')
       await loadData(staffData)
       setLoading(false)
       setCheckingStoredPin(false)
@@ -179,7 +183,8 @@ export default function StaffPage() {
       { data: gear },
       { data: shifts },
       { data: allSA },
-      { data: allWA }
+      { data: allWA },
+      { data: guestsData }
     ] = await Promise.all([
       supabase.from('staff_assignments')
         .select('id, staff_id, session_id, moment_id, shift_id, sessions(id, date, start_time, end_time, capacity, event_id, workshops(name, location)), open_moments(id, name, date, start_time, end_time, location, moment_type, event_id), staff_shifts(id, title, shift_date, start_time, end_time, location, shift_type, description, event_id)')
@@ -199,7 +204,8 @@ export default function StaffPage() {
       supabase.from('staff_assignments')
         .select('id, staff_id, session_id, moment_id, shift_id, staff(id, name, is_vendor)')
         .not('staff_id', 'is', null),
-      supabase.from('staff_workshop_assignments').select('id, staff_id, workshop_id, staff(id, name, is_vendor)')
+      supabase.from('staff_workshop_assignments').select('id, staff_id, workshop_id, staff(id, name, is_vendor)'),
+      supabase.from('guests').select('*, ticket_types(*)').order('name')
     ])
     console.log('[loadData] staffRecord.id:', staffRecord.id)
     console.log('[loadData] myA count:', myA?.length ?? 'null', 'error:', myAError ? JSON.stringify(myAError) : null)
@@ -218,6 +224,7 @@ export default function StaffPage() {
     setAllStaffAssignments(allSA || [])
     setAllWorkshopAssns(allWA || [])
     setMyWorkshopAssns(swa || [])
+    setGuests(guestsData || [])
     // Union: staff_event_assignments + events derived from actual assignments
     const seaEvts = (seaData || []).map(sea => sea.events).filter(Boolean)
     const seaEventIds = new Set(seaEvts.map(e => e.id))
@@ -339,6 +346,33 @@ export default function StaffPage() {
   async function updateCheckin(geId, status) {
     await supabase.from('guest_events').update({ checkin_status: status }).eq('id', geId)
     setGuestEvents(prev => prev.map(g => g.id === geId ? { ...g, checkin_status: status } : g))
+  }
+
+  // Check-In tab (Guest Services staff) — mirrors admin's Check-In tab exactly.
+  async function updateGuestCheckinStatus(guestId, status) {
+    if (!selectedEvent) return
+    const { error } = await supabase
+      .from('guest_events')
+      .update({ checkin_status: status })
+      .eq('guest_id', guestId)
+      .eq('event_id', selectedEvent.id)
+    if (!error) {
+      setGuestEvents(ge => ge.map(e =>
+        e.guest_id === guestId && e.event_id === selectedEvent.id
+          ? { ...e, checkin_status: status }
+          : e
+      ))
+    }
+  }
+
+  async function updateGuestWaiverSigned(guestId, signed) {
+    const { error } = await supabase
+      .from('guests')
+      .update({ waiver_signed: signed })
+      .eq('id', guestId)
+    if (!error) {
+      setGuests(gs => gs.map(g => g.id === guestId ? { ...g, waiver_signed: signed } : g))
+    }
   }
 
   function toggleLookup(id) {
@@ -942,6 +976,144 @@ export default function StaffPage() {
     )
   }
 
+  // Check-In tab — Guest Services staff only. Mirrors the admin Check-In tab
+  // exactly (same data, same layout, same status buttons and waiver toggle).
+  function renderCheckInTab() {
+    if (!selectedEvent) {
+      return <div style={{ textAlign: 'center', color: '#8C8C8C', padding: '48px 0', fontSize: 14 }}>Select an event to view check-in.</div>
+    }
+
+    const eventGEs = guestEvents.filter(ge => ge.event_id === selectedEvent.id)
+    const allCheckinGuests = eventGEs.map(ge => ({
+      ge,
+      guest: guests.find(g => g.id === ge.guest_id)
+    })).filter(x => x.guest)
+
+    const search = checkinSearch.toLowerCase()
+    const filtered = allCheckinGuests.filter(x =>
+      !search ||
+      x.guest.name.toLowerCase().includes(search) ||
+      x.guest.email.toLowerCase().includes(search)
+    )
+
+    const sortOrder = { checked_in: 0, not_arrived: 1, departed: 2 }
+    filtered.sort((a, b) => {
+      const aS = a.ge.checkin_status || 'not_arrived'
+      const bS = b.ge.checkin_status || 'not_arrived'
+      const aO = sortOrder[aS] ?? 1
+      const bO = sortOrder[bS] ?? 1
+      if (aO !== bO) return aO - bO
+      return a.guest.name.localeCompare(b.guest.name)
+    })
+
+    const total = eventGEs.length
+    const checkedIn = eventGEs.filter(ge => ge.checkin_status === 'checked_in').length
+    const departed = eventGEs.filter(ge => ge.checkin_status === 'departed').length
+    const notArrived = eventGEs.filter(ge => !ge.checkin_status || ge.checkin_status === 'not_arrived').length
+
+    const statusLabels = { not_arrived: 'Not Arrived', checked_in: 'Checked In', departed: 'Departed' }
+    const activeColors = {
+      not_arrived: { bg: '#e0e0e0', color: '#444', border: '#c0c0c0' },
+      checked_in: { bg: '#1a7a4a', color: '#fff', border: '#1a7a4a' },
+      departed: { bg: '#2060b0', color: '#fff', border: '#2060b0' }
+    }
+
+    return (
+      <div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 10, marginBottom: 18 }}>
+          {[
+            { label: 'Total', value: total, color: '#1a1a1a' },
+            { label: 'Checked In', value: checkedIn, color: '#1a7a4a' },
+            { label: 'Departed', value: departed, color: '#2060b0' },
+            { label: 'Not Arrived', value: notArrived, color: '#888' }
+          ].map(s => (
+            <div key={s.label} style={{ background: '#f5f5f5', borderRadius: 8, padding: '12px 16px' }}>
+              <div style={{ fontSize: 22, fontWeight: 500, color: s.color }}>{s.value}</div>
+              <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>{s.label}</div>
+            </div>
+          ))}
+        </div>
+
+        <input type="text" placeholder="Search by name or email..." value={checkinSearch}
+          onChange={e => setCheckinSearch(e.target.value)}
+          style={{ ...inp, marginBottom: 14 }} />
+
+        {filtered.length === 0 ? (
+          <div style={{ fontSize: 13, color: '#aaa', padding: 14, background: '#f9f9f9', borderRadius: 8 }}>No guests found.</div>
+        ) : filtered.map(({ ge, guest }) => {
+          const status = ge.checkin_status || 'not_arrived'
+          const ticketDefault = guest.ticket_types ? guest.ticket_types.credits_per_person * guest.ticket_types.party_cap : null
+          const hasCreditNotes = !!(ge.credit_notes && ge.credit_notes.trim())
+          const hasBookingSummary = !!(ge.booking_summary && ge.booking_summary.trim())
+          const creditsTotal = ge.credits_total != null ? ge.credits_total : (ticketDefault || 0)
+          const creditsUsed = ge.credits_used || 0
+          const creditsRemaining = creditsTotal - creditsUsed
+          const workshopCount = registrations.filter(r => r.guest_id === guest.id && r.event_id === selectedEvent.id && r.status === 'confirmed').length
+          return (
+            <div key={guest.id} style={{ ...card, marginBottom: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 8 }}>
+                <div style={{ flex: 1, minWidth: 140 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+                    <div style={{ fontSize: 14, fontWeight: 500 }}>{guest.name}</div>
+                    {status === 'checked_in' && guest.waiver_signed && (
+                      <span style={{ fontSize: 11, color: '#1a7a4a', background: '#e8f5ee', padding: '2px 8px', borderRadius: 10 }}>✓ waiver</span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: '#1a1a1a', marginTop: 2 }}>
+                    {guest.ticket_types?.display_name || guest.ticket_types?.name}
+                  </div>
+                  {hasBookingSummary && (
+                    <div style={{ marginTop: 6 }}>
+                      <span style={{ fontSize: 12, fontWeight: 500, padding: '3px 10px', borderRadius: 20, background: '#fff8ec', color: '#9a5a18', border: '0.5px solid #e8c080' }}>
+                        📋 {ge.booking_summary}
+                      </span>
+                    </div>
+                  )}
+                  {hasCreditNotes && (
+                    <div style={{ marginTop: 6 }}>
+                      <span style={{ fontSize: 12, fontWeight: 500, padding: '3px 10px', borderRadius: 20, background: '#fff8ec', color: '#9a5a18', border: '0.5px solid #e8c080' }}>
+                        📋 {ge.credit_notes}
+                      </span>
+                    </div>
+                  )}
+                  {creditsRemaining > 0 ? (
+                    <div style={{ fontSize: 12, marginTop: 6 }}>
+                      <span style={{ fontWeight: 600, color: '#1a7a4a' }}>{creditsRemaining} credit{creditsRemaining === 1 ? '' : 's'} available</span>
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 12, color: '#999', marginTop: 6 }}>All credits used</div>
+                  )}
+                  {workshopCount > 0 && (
+                    <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>
+                      {workshopCount} workshop{workshopCount === 1 ? '' : 's'} registered
+                    </div>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', alignItems: 'center' }}>
+                  {['not_arrived', 'checked_in', 'departed'].map(s => {
+                    const isActive = status === s
+                    const c = isActive ? activeColors[s] : { bg: '#fff', color: '#bbb', border: '#e8e8e8' }
+                    return (
+                      <button key={s} onClick={() => updateGuestCheckinStatus(guest.id, s)}
+                        style={{ fontSize: 11, padding: '5px 11px', borderRadius: 6, border: '0.5px solid ' + c.border, background: c.bg, color: c.color, cursor: 'pointer', fontWeight: isActive ? 500 : 400 }}>
+                        {statusLabels[s]}
+                      </button>
+                    )
+                  })}
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#888', cursor: 'pointer', marginLeft: 6 }}>
+                    <input type="checkbox" checked={!!guest.waiver_signed}
+                      onChange={e => updateGuestWaiverSigned(guest.id, e.target.checked)}
+                      style={{ cursor: 'pointer' }} />
+                    Waiver
+                  </label>
+                </div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
 
   // Instructor fallback view (read-only roster for vendor/workshop instructors)
   if (staffMember && staffRole === 'instructor') return (
@@ -1039,6 +1211,7 @@ export default function StaffPage() {
   )
 
   const isVendor = !!staffMember.is_vendor
+  const isCheckin = !!staffMember.is_checkin
 
   return (
     <div style={{ fontFamily: 'sans-serif', maxWidth: 720, width: '100%', margin: '0 auto', padding: '24px 16px', color: '#1a1a1a', background: '#FAFAF8', minHeight: '100vh' }}>
@@ -1089,7 +1262,7 @@ export default function StaffPage() {
         scrollbarWidth: 'none', msOverflowStyle: 'none',
         borderBottom: '0.5px solid #E0DEDA', marginBottom: 24
       }}>
-        {[['schedule', 'Schedule'], ['agenda', 'My Agenda'], ['site', 'Site'], ['guide', 'Guide'], ['packing', 'Packing List']].map(([t, label]) => (
+        {[...(isCheckin ? [['checkin', 'Check-In']] : []), ['schedule', 'Schedule'], ['agenda', 'My Agenda'], ['site', 'Site'], ['guide', 'Guide'], ['packing', 'Packing List']].map(([t, label]) => (
           <button key={t} onClick={() => setActiveTab(t)} style={{
             flex: '0 0 auto',
             padding: '8px 14px', border: 'none', background: 'none', cursor: 'pointer',
@@ -1099,6 +1272,9 @@ export default function StaffPage() {
           }}>{label}</button>
         ))}
       </div>
+
+      {/* CHECK-IN — Guest Services staff only, mirrors admin's Check-In tab */}
+      {activeTab === 'checkin' && isCheckin && renderCheckInTab()}
 
       {/* SCHEDULE — read-only public schedule for the selected event */}
       {activeTab === 'schedule' && renderPublicScheduleTab()}

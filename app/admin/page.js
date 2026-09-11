@@ -214,7 +214,7 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
   const [staffMembers, setStaffMembers] = useState([])
   const [staffEventAssns, setStaffEventAssns] = useState([])
   const [staffWorkshopAssns, setStaffWorkshopAssns] = useState([])
-  const [newStaffMember, setNewStaffMember] = useState({ name: '', pin: '', email: '', phone: '', notes: '', is_vendor: false, vendor_name: '' })
+  const [newStaffMember, setNewStaffMember] = useState({ name: '', pin: '', email: '', phone: '', notes: '', is_vendor: false, vendor_name: '', is_checkin: false })
   const [staffMemberMsg, setStaffMemberMsg] = useState(null)
   const [addingStaffMember, setAddingStaffMember] = useState(false)
   const [staffDeleteInput, setStaffDeleteInput] = useState({})
@@ -1535,11 +1535,12 @@ const filteredGuests = guests.filter(g => {
       notes: newStaffMember.notes || null,
       is_vendor: newStaffMember.is_vendor,
       vendor_name: newStaffMember.is_vendor ? (newStaffMember.vendor_name || null) : null,
+      is_checkin: newStaffMember.is_checkin,
       is_active: true
     })
     if (!error) {
       setStaffMemberMsg({ type: 'success', text: 'Staff member added.' })
-      setNewStaffMember({ name: '', pin: '', email: '', phone: '', notes: '', is_vendor: false, vendor_name: '' })
+      setNewStaffMember({ name: '', pin: '', email: '', phone: '', notes: '', is_vendor: false, vendor_name: '', is_checkin: false })
       await loadAll()
     } else setStaffMemberMsg({ type: 'error', text: error.message.includes('unique') ? 'PIN already in use.' : 'Could not add staff member.' })
     setAddingStaffMember(false)
@@ -1556,6 +1557,7 @@ const filteredGuests = guests.filter(g => {
       notes: editStaffMemberData.notes || null,
       is_vendor: editStaffMemberData.is_vendor,
       vendor_name: editStaffMemberData.is_vendor ? (editStaffMemberData.vendor_name || null) : null,
+      is_checkin: editStaffMemberData.is_checkin,
     }).eq('id', editingStaffMember.id)
     if (!error) {
       setEditingStaffMember(null)
@@ -3878,6 +3880,10 @@ const filteredGuests = guests.filter(g => {
                     <input style={inp} value={newStaffMember.vendor_name} onChange={e => setNewStaffMember(s => ({ ...s, vendor_name: e.target.value }))} placeholder="Occam Cider Co" />
                   </div>
                 )}
+                <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, cursor: 'pointer', marginBottom: 12 }}>
+                  <input type="checkbox" checked={newStaffMember.is_checkin} onChange={e => setNewStaffMember(s => ({ ...s, is_checkin: e.target.checked }))} style={{ cursor: 'pointer' }} />
+                  Guest Services
+                </label>
                 <button onClick={createStaffMember} disabled={addingStaffMember} style={{ ...btn('#1a1a1a', '#fff'), width: '100%', padding: '10px' }}>
                   {addingStaffMember ? 'Adding…' : 'Add staff member'}
                 </button>
@@ -3913,6 +3919,10 @@ const filteredGuests = guests.filter(g => {
                             <input style={inp} value={editStaffMemberData.vendor_name || ''} onChange={e => setEditStaffMemberData(d => ({ ...d, vendor_name: e.target.value }))} placeholder="Occam Cider Co" />
                           </div>
                         )}
+                        <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, cursor: 'pointer', marginBottom: 12 }}>
+                          <input type="checkbox" checked={!!editStaffMemberData.is_checkin} onChange={e => setEditStaffMemberData(d => ({ ...d, is_checkin: e.target.checked }))} style={{ cursor: 'pointer' }} />
+                          Guest Services
+                        </label>
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                           <button onClick={updateStaffMember} disabled={savingStaffMember} style={btn('#1a1a1a', '#fff')}>{savingStaffMember ? 'Saving…' : 'Save'}</button>
                           <button onClick={() => { setEditingStaffMember(null); setEditStaffMemberData({}) }} style={btn('#fff')}>Cancel</button>
@@ -3924,6 +3934,7 @@ const filteredGuests = guests.filter(g => {
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 4 }}>
                           <div style={{ fontSize: 14, fontWeight: 500 }}>{sm.name}</div>
                           {sm.is_vendor && <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: 20, background: '#FFF8E8', color: '#9a5a18', border: '0.5px solid #E8C080' }}>Partner</span>}
+                          {sm.is_checkin && <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: 20, background: '#EEF3EE', color: '#2D4A2D', border: '0.5px solid #C0D4C0' }}>Guest Services</span>}
                           {sm.is_active === false && <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: 20, background: '#F5F0E8', color: '#B5622A' }}>Inactive</span>}
                         </div>
                         <div style={{ fontSize: 12, color: '#888', marginBottom: 2 }}>
@@ -3933,7 +3944,7 @@ const filteredGuests = guests.filter(g => {
                         {sm.notes && <div style={{ fontSize: 12, color: '#aaa', fontStyle: 'italic' }}>{sm.notes}</div>}
                       </div>
                       <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center', flexWrap: 'wrap' }}>
-                        <button onClick={() => { setEditingStaffMember(sm); setEditStaffMemberData({ name: sm.name, pin: sm.pin, email: sm.email || '', phone: sm.phone || '', notes: sm.notes || '', is_vendor: sm.is_vendor || false, vendor_name: sm.vendor_name || '' }); setStaffMemberMsg(null) }} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px' }}>Edit</button>
+                        <button onClick={() => { setEditingStaffMember(sm); setEditStaffMemberData({ name: sm.name, pin: sm.pin, email: sm.email || '', phone: sm.phone || '', notes: sm.notes || '', is_vendor: sm.is_vendor || false, vendor_name: sm.vendor_name || '', is_checkin: sm.is_checkin || false }); setStaffMemberMsg(null) }} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px' }}>Edit</button>
                         <button
                           onClick={() => toggleStaffActive(sm.id, sm.is_active !== false)}
                           disabled={togglingStaffId === sm.id}
