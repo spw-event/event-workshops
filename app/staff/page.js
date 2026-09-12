@@ -661,7 +661,6 @@ export default function StaffPage() {
     }
 
     const renderMomentCard = (m, isMandatory) => {
-      const lookupOpen = activeGuestLookup === m.id
       return (
         <div key={m.id} style={{
           background: isMandatory ? '#F5F0E8' : '#fff', borderRadius: 4, padding: '14px 16px', marginBottom: 10,
@@ -679,13 +678,6 @@ export default function StaffPage() {
             {m.location ? ' · 📍 ' + m.location : ''}
           </div>
           {m.description && <div style={{ fontSize: 11, color: '#8C8C8C', marginTop: 4, lineHeight: 1.5 }}>{m.description}</div>}
-          <div style={{ marginTop: 10, paddingTop: 10, borderTop: '0.5px solid ' + (isMandatory ? '#E8D8BC' : '#F0EDE8') }}>
-            <button onClick={() => toggleLookup(m.id)}
-              style={{ ...btn(lookupOpen ? '#1a1a1a' : '#fff', lookupOpen ? '#fff' : '#1a1a1a'), fontSize: 12, padding: '4px 12px' }}>
-              Guest Lookup
-            </button>
-            {renderGuestLookup(m.id)}
-          </div>
           {renderStaffModeExtras(getAssignedStaff(a => a.moment_id === m.id), m.staff_notes, 'moment_' + m.id)}
         </div>
       )
