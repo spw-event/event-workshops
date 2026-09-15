@@ -55,23 +55,24 @@ export default function StaffPage() {
   const [guideSection, setGuideSection] = useState(null)
   const [mapFullscreen, setMapFullscreen] = useState(false)
 
+  // Guide tab, Staff Resources — which category (nested accordion) is expanded
+  const [openResourceCategory, setOpenResourceCategory] = useState(null)
+  const [zoomedResourceImage, setZoomedResourceImage] = useState(null)
+
   // Schedule tab, staff mode — which item keys have their notes expanded
   const [expandedNotes, setExpandedNotes] = useState({})
 
   // Persists whichever record just authenticated (from a staff-table row or
-  // an instructor_pins row) under the same unified keys /login writes, plus
-  // the legacy spw_staff_id some sub-pages (e.g. /staff/resources) key off.
+  // an instructor_pins row) under the same unified keys /login writes.
   function persistStaffAuth(record, role) {
     localStorage.setItem('spw_staff_record', JSON.stringify(record))
     localStorage.setItem('spw_staff_role', role)
-    localStorage.setItem('spw_staff_id', record.id)
   }
 
   function clearStaffAuth() {
     // Guest localStorage keys (spw_guest_token etc) are intentionally untouched.
     localStorage.removeItem('spw_staff_record')
     localStorage.removeItem('spw_staff_role')
-    localStorage.removeItem('spw_staff_id')
     localStorage.removeItem('spw_staff_event_id')
   }
 
@@ -489,21 +490,62 @@ export default function StaffPage() {
     const cats = Object.keys(catCounts)
     return (
       <div>
-        {cats.map(cat => (
-          <a
-            key={cat}
-            href={'/staff/resources/' + encodeURIComponent(cat)}
+        {cats.map(cat => {
+          const open = openResourceCategory === cat
+          const catResources = visible.filter(r => (r.category || 'All Events') === cat)
+          return (
+            <div key={cat} style={{ marginBottom: 8, background: '#fff', border: '0.5px solid #E8E4DE', borderRadius: 8, overflow: 'hidden' }}>
+              <button
+                onClick={() => setOpenResourceCategory(open ? null : cat)}
+                style={{
+                  width: '100%', display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left', font: 'inherit',
+                  padding: '16px 18px', background: 'none', border: 'none', cursor: 'pointer'
+                }}
+              >
+                <span style={{ fontSize: 13, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#1a1a1a', flex: 1 }}>{cat}</span>
+                <span style={{ fontSize: 12, color: '#8C8C8C' }}>{catCounts[cat]}</span>
+                <span style={{ fontSize: 13, color: '#8C8C8C', flexShrink: 0 }}>{open ? '▾' : '▸'}</span>
+              </button>
+              <div style={{ display: 'grid', gridTemplateRows: open ? '1fr' : '0fr', transition: 'grid-template-rows 0.25s ease' }}>
+                <div style={{ overflow: 'hidden' }}>
+                  <div style={{ padding: '0 18px 16px' }}>
+                    {catResources.map(res => (
+                      <div key={res.id} style={{ background: '#F7F6F4', border: '0.5px solid #E8E4DE', borderRadius: 8, padding: '14px 16px', marginBottom: 10 }}>
+                        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: res.description ? 6 : 0 }}>{res.title}</div>
+                        {res.description && (
+                          <div style={{ fontSize: 13, color: '#8C8C8C', lineHeight: 1.6, whiteSpace: 'pre-line' }}>{res.description}</div>
+                        )}
+                        {res.image_url && (
+                          <img
+                            src={res.image_url}
+                            alt={res.title}
+                            loading="lazy"
+                            onClick={() => setZoomedResourceImage(res.image_url)}
+                            style={{ width: '100%', marginTop: 12, borderRadius: 8, display: 'block', cursor: 'zoom-in', border: '0.5px solid #E8E4DE' }}
+                          />
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )
+        })}
+
+        {/* Full-screen image zoom */}
+        {zoomedResourceImage && (
+          <div
+            onClick={() => setZoomedResourceImage(null)}
             style={{
-              display: 'flex', alignItems: 'center', gap: 10, textDecoration: 'none', color: 'inherit',
-              padding: '16px 18px', marginBottom: 8, background: '#fff',
-              border: '0.5px solid #E8E4DE', borderRadius: 8
+              position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 200,
+              background: 'rgba(0,0,0,0.92)', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              padding: 16, cursor: 'zoom-out'
             }}
           >
-            <span style={{ fontSize: 13, fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#1a1a1a', flex: 1 }}>{cat}</span>
-            <span style={{ fontSize: 12, color: '#8C8C8C' }}>{catCounts[cat]}</span>
-            <span style={{ fontSize: 16, color: '#8C8C8C' }}>→</span>
-          </a>
-        ))}
+            <img src={zoomedResourceImage} alt="" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: 4 }} />
+          </div>
+        )}
       </div>
     )
   }

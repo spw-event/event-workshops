@@ -4,13 +4,11 @@ import { useState } from 'react'
 import { supabase } from '../../lib/supabase'
 
 // Writes the same keys app/staff/page.js and app/admin/page.js read on
-// mount, plus the legacy spw_staff_id some sub-pages (e.g. /staff/resources)
-// still key off — so a login here is indistinguishable from a login on
-// either of those pages' own fallback forms.
+// mount — so a login here is indistinguishable from a login on either of
+// those pages' own fallback forms.
 function persistStaffAuth(record, role) {
   localStorage.setItem('spw_staff_record', JSON.stringify(record))
   localStorage.setItem('spw_staff_role', role)
-  localStorage.setItem('spw_staff_id', record.id)
 }
 
 export default function LoginPage() {
