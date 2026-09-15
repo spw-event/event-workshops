@@ -109,7 +109,7 @@ export default function AdminPage() {
   const [savingGuestTicket, setSavingGuestTicket] = useState(false)
 
   const [activityType, setActivityType] = useState('workshop') // 'workshop' | 'moment' — unified Program add form
-  const [newWorkshop, setNewWorkshop] = useState({ name: '', category: '', instructor: '', description: '', location: '', max_per_guest: 1, date: '', start_time: '', end_time: '', capacity: 30 })
+  const [newWorkshop, setNewWorkshop] = useState({ name: '', category: '', instructor: '', description: '', location: '', max_per_guest: 1, credit_cost: 1, date: '', start_time: '', end_time: '', capacity: 30 })
   const [workshopMsg, setWorkshopMsg] = useState(null)
   const [addingWorkshop, setAddingWorkshop] = useState(false)
   const [editingWorkshop, setEditingWorkshop] = useState(null)
@@ -746,6 +746,7 @@ const filteredGuests = guests.filter(g => {
       location: newWorkshop.location || null,
       description: newWorkshop.description || null,
       max_per_guest: parseInt(newWorkshop.max_per_guest) || 1,
+      credit_cost: parseInt(newWorkshop.credit_cost) || 1,
       is_paid: false, price: 0
     }).select().single()
     if (!error && ws) {
@@ -759,7 +760,7 @@ const filteredGuests = guests.filter(g => {
       })
       if (!sessErr) {
         setWorkshopMsg({ type: 'success', text: 'Workshop added.' })
-        setNewWorkshop({ name: '', category: '', instructor: '', description: '', location: '', max_per_guest: 1, date: '', start_time: '', end_time: '', capacity: 30 })
+        setNewWorkshop({ name: '', category: '', instructor: '', description: '', location: '', max_per_guest: 1, credit_cost: 1, date: '', start_time: '', end_time: '', capacity: 30 })
         await loadAll()
       } else {
         setWorkshopMsg({ type: 'error', text: 'Workshop created, but could not add its time slot.' })
@@ -779,7 +780,8 @@ const filteredGuests = guests.filter(g => {
       instructor: editWorkshopData.instructor,
       location: editWorkshopData.location,
       description: editWorkshopData.description,
-      max_per_guest: parseInt(editWorkshopData.max_per_guest) || 1
+      max_per_guest: parseInt(editWorkshopData.max_per_guest) || 1,
+      credit_cost: parseInt(editWorkshopData.credit_cost) || 1
     }).eq('id', editingWorkshop.id)
     if (!error) {
       setEditingWorkshop(null)
@@ -1014,6 +1016,7 @@ const filteredGuests = guests.filter(g => {
         link_2_label: gi.link_2_label || null,
         link_2_url: gi.link_2_url || null,
         is_available_to_rent: gi.is_available_to_rent,
+        visibility: gi.visibility,
         sort_order: gi.sort_order
       }))
     )
@@ -1806,7 +1809,9 @@ const filteredGuests = guests.filter(g => {
             </div>
           </div>
 
-          {/* Credits vs Capacity — client-side from already-loaded guestEvents/guests/sessions, no extra queries */}
+          {/* Credits vs Capacity — client-side from already-loaded guestEvents/guests/sessions, no extra queries.
+              Seats are weighted by each workshop's credit_cost, since a seat in a
+              2-credit workshop consumes twice the credit budget of a 1-credit seat. */}
           {(() => {
             const eventGuestEvents = guestEvents.filter(ge => ge.event_id === selectedEvent?.id)
             const totalCreditsAvailable = eventGuestEvents.reduce((sum, ge) => {
@@ -1815,7 +1820,8 @@ const filteredGuests = guests.filter(g => {
               if (!guest?.ticket_types) return sum
               return sum + guest.ticket_types.credits_per_person * guest.ticket_types.party_cap
             }, 0)
-            const seatsPerCredit = totalCreditsAvailable > 0 ? totalCap / totalCreditsAvailable : null
+            const totalCapCredits = filteredSessions.reduce((sum, s) => sum + s.capacity * (s.workshops?.credit_cost || 1), 0)
+            const seatsPerCredit = totalCreditsAvailable > 0 ? totalCapCredits / totalCreditsAvailable : null
             const coveragePct = seatsPerCredit !== null ? Math.round(seatsPerCredit * 100) : null
             const status = seatsPerCredit === null ? 'none' : seatsPerCredit >= 1 ? 'good' : seatsPerCredit >= 0.8 ? 'warn' : 'bad'
             const colors = {
@@ -1840,11 +1846,11 @@ const filteredGuests = guests.filter(g => {
                       {coveragePct === null ? '—' : coveragePct + '%'}
                     </div>
                     <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>
-                      {seatsPerCredit === null ? 'coverage' : seatsPerCredit.toFixed(1) + ' seats per credit'}
+                      {seatsPerCredit === null ? 'coverage' : seatsPerCredit.toFixed(1) + ' credit-seats per credit'}
                     </div>
                   </div>
                   <div style={{ fontSize: 12, color: '#888' }}>
-                    {totalCap} workshop seats · {totalCreditsAvailable} credits available
+                    {totalCap} workshop seats{totalCapCredits !== totalCap ? ' (' + totalCapCredits + ' at credit cost)' : ''} · {totalCreditsAvailable} credits available
                   </div>
                 </div>
                 <div style={{ fontSize: 13, color: colors.text, fontWeight: 500 }}>{message}</div>
@@ -2164,6 +2170,10 @@ const filteredGuests = guests.filter(g => {
                   <label style={lbl}>Max per guest</label>
                   <input type="number" min="1" value={newWorkshop.max_per_guest} onChange={e => setNewWorkshop(w => ({ ...w, max_per_guest: e.target.value }))} style={{ ...inp, width: 100 }} />
                 </div>
+                <div style={fw}>
+                  <label style={lbl}>Cost per person (credits)</label>
+                  <input type="number" min="1" value={newWorkshop.credit_cost} onChange={e => setNewWorkshop(w => ({ ...w, credit_cost: e.target.value }))} style={{ ...inp, width: 100 }} />
+                </div>
               </>
             ) : (
               <>
@@ -2310,6 +2320,10 @@ const filteredGuests = guests.filter(g => {
                           <label style={lbl}>Max per guest</label>
                           <input type="number" min="1" value={editWorkshopData.max_per_guest ?? 1} onChange={e => setEditWorkshopData(d => ({ ...d, max_per_guest: e.target.value }))} style={{ ...inp, width: 100 }} />
                         </div>
+                        <div style={fw}>
+                          <label style={lbl}>Cost per person (credits)</label>
+                          <input type="number" min="1" value={editWorkshopData.credit_cost ?? 1} onChange={e => setEditWorkshopData(d => ({ ...d, credit_cost: e.target.value }))} style={{ ...inp, width: 100 }} />
+                        </div>
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                           <button onClick={updateWorkshop} disabled={savingWorkshop} style={btn('#1a1a1a', '#fff')}>{savingWorkshop ? 'Saving...' : 'Save'}</button>
                           <button onClick={() => { setEditingWorkshop(null); setEditWorkshopData({}) }} style={btn('#fff')}>Cancel</button>
@@ -2323,6 +2337,9 @@ const filteredGuests = guests.filter(g => {
                             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 2 }}>
                               <div style={{ fontSize: 14, fontWeight: 500 }}>{w?.name}</div>
                               <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.04em', padding: '2px 8px', borderRadius: 20, background: b.bg, color: b.color }}>{b.label}</span>
+                              {w?.credit_cost > 1 && (
+                                <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.04em', padding: '2px 8px', borderRadius: 20, background: '#FFF8E8', color: '#9a5a18' }}>{w.credit_cost} credits</span>
+                              )}
                             </div>
                             <div style={{ fontSize: 12, color: '#888' }}>
                               {w?.category}{w?.instructor ? ' · ' + w.instructor : ''}
@@ -2330,7 +2347,7 @@ const filteredGuests = guests.filter(g => {
                             </div>
                             {w?.description && <div style={{ fontSize: 12, color: '#aaa' }}>{w.description}</div>}
                           </div>
-                          <button onClick={() => { setEditingWorkshop(w); setEditWorkshopData({ name: w.name, category: w.category || '', instructor: w.instructor || '', location: w.location || '', description: w.description || '', max_per_guest: w.max_per_guest || 1 }); setWorkshopMsg(null) }} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px', flexShrink: 0 }}>Edit</button>
+                          <button onClick={() => { setEditingWorkshop(w); setEditWorkshopData({ name: w.name, category: w.category || '', instructor: w.instructor || '', location: w.location || '', description: w.description || '', max_per_guest: w.max_per_guest || 1, credit_cost: w.credit_cost || 1 }); setWorkshopMsg(null) }} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px', flexShrink: 0 }}>Edit</button>
                         </div>
 
                         {/* Sessions list */}

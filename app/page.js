@@ -883,12 +883,13 @@ export default function Home() {
     const session = sessions.find(s => s.id === expandedSessionId)
     if (!guest || !session || !selectedEvent) return
     const partySize = selectedPartySize
+    const creditCost = (session.workshops?.credit_cost || 1) * partySize
     collapseSession()
     setRegistering(session.id)
     setMessage(null)
 
     const creditsRemaining = partyCreditsTotal - partyCreditsUsed
-    if (partySize > creditsRemaining) {
+    if (creditCost > creditsRemaining) {
       setMessage({ type: 'error', text: 'Not enough credits for that many people.' })
       setRegistering(null)
       return
@@ -909,7 +910,7 @@ export default function Home() {
       // Update credits in guest_events
       await supabase
         .from('guest_events')
-        .update({ credits_used: partyCreditsUsed + partySize })
+        .update({ credits_used: partyCreditsUsed + creditCost })
         .eq('guest_id', guest.id)
         .eq('event_id', selectedEvent.id)
       setMessage({ type: 'success', text: 'Reserved ' + partySize + ' spot' + (partySize > 1 ? 's' : '') + ' successfully.' })
@@ -944,7 +945,7 @@ export default function Home() {
       return
     }
 
-    const creditRefund = partySize || 1
+    const creditRefund = (session?.workshops?.credit_cost || 1) * (partySize || 1)
     await supabase
       .from('guest_events')
       .update({ credits_used: Math.max(0, partyCreditsUsed - creditRefund) })
@@ -1140,7 +1141,8 @@ export default function Home() {
   function getMaxPartySize(sessionId) {
     const avail = sessionAvailability[sessionId] || 0
     const partyCap = guest?.ticket_types?.party_cap || 1
-    return Math.max(1, Math.min(creditsRemaining, partyCap, avail))
+    const costPerPerson = sessions.find(s => s.id === sessionId)?.workshops?.credit_cost || 1
+    return Math.max(1, Math.min(Math.floor(creditsRemaining / costPerPerson), partyCap, avail))
   }
 
   // "Fri" / "Sat" — used on the filter pills
@@ -1459,7 +1461,8 @@ export default function Home() {
                 const reg = getReg(session.id)
                 const avail = sessionAvailability[session.id] ?? session.capacity
                 const isFull = avail === 0 && !registered
-                const canRegister = registrationOpen && creditsRemaining > 0 && !isOffline && !isFull
+                const costPerPerson = session.workshops?.credit_cost || 1
+                const canRegister = registrationOpen && creditsRemaining >= costPerPerson && !isOffline && !isFull
                 const timeRange = (
                   <div style={{ fontSize: 14, fontWeight: 600, color: '#1a1a1a', marginBottom: 10 }}>
                     {formatTime(session.start_time)} – {formatTime(session.end_time)}
@@ -1509,7 +1512,9 @@ export default function Home() {
                           ))}
                         </div>
                         <div style={{ fontSize: 11, color: '#8C8C8C', marginBottom: 10 }}>
-                          {selectedPartySize} credit{selectedPartySize > 1 ? 's' : ''} used · {creditsRemaining - selectedPartySize} remaining after
+                          {selectedPartySize * costPerPerson} credit{selectedPartySize * costPerPerson > 1 ? 's' : ''} used
+                          {costPerPerson > 1 ? ' (' + costPerPerson + ' per person)' : ''}
+                          {' '}· {creditsRemaining - selectedPartySize * costPerPerson} remaining after
                         </div>
                       </>
                     )}
@@ -1530,7 +1535,7 @@ export default function Home() {
                        isOffline ? 'Offline' :
                        !registrationOpen ? 'Not open yet' :
                        isFull ? 'Full' :
-                       creditsRemaining <= 0 ? 'Credits used' : 'Reserve'}
+                       creditsRemaining < costPerPerson ? 'Credits used' : 'Reserve'}
                     </button>
                   </div>
                 )
@@ -1574,6 +1579,11 @@ export default function Home() {
                     <div style={{ fontSize: 12, color: '#8C8C8C', marginTop: 3 }}>
                       {workshop?.instructor || ''}{workshop?.instructor && workshop?.location ? ' · ' : ''}{workshop?.location ? '📍 ' + workshop.location : ''}
                     </div>
+                    {workshop?.credit_cost > 1 && (
+                      <div style={{ fontSize: 11, fontWeight: 600, color: '#9a5a18', marginTop: 6 }}>
+                        {workshop.credit_cost} credits per person
+                      </div>
+                    )}
                     {workshop?.description && <div style={{ fontSize: 12, color: '#8C8C8C', marginTop: 6, lineHeight: 1.5 }}>{workshop.description}</div>}
                     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
                       {group.sessions.map(renderTimeSlotPill)}
