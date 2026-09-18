@@ -435,13 +435,10 @@ export default function StaffPage() {
     )
   }
 
-  // Filter this staff member's own assignments to the selected event. Regular
-  // staff mainly get shift assignments (session/moment duty is referenced via
-  // the Schedule tab's Staff View instead), but vendors need their own
-  // sessions surfaced too — direct assignments plus workshop-wide blanket
-  // coverage from staff_workshop_assignments — since that's how most vendor
-  // coverage is actually granted. Shifts stay included for everyone: a vendor
-  // occasionally does get one, and it shouldn't disappear from their agenda.
+  // Filter this staff member's own assignments to the selected event. Direct
+  // session/moment duty and shifts show for everyone; vendors additionally
+  // get workshop-wide blanket coverage from staff_workshop_assignments, since
+  // that's how most vendor coverage is actually granted.
   const myFilteredAssignments = selectedEvent
     ? myAssignments.filter(a => {
         const eid = a.sessions?.event_id || a.open_moments?.event_id || a.staff_shifts?.event_id
@@ -450,17 +447,18 @@ export default function StaffPage() {
     : myAssignments
   const myIsVendor = !!staffMember?.is_vendor
   const myShiftAssignments = myFilteredAssignments.filter(a => a.staff_shifts)
+  const myDirectSessions = myFilteredAssignments.filter(a => a.sessions)
+  const myDirectMoments = myFilteredAssignments.filter(a => a.open_moments)
   const myAgendaAssignments = myIsVendor
     ? (() => {
-        const directSessions = myFilteredAssignments.filter(a => a.sessions)
-        const directSessionIds = new Set(directSessions.map(a => a.session_id))
+        const directSessionIds = new Set(myDirectSessions.map(a => a.session_id))
         const workshopIds = myWorkshopAssns.map(a => a.workshop_id)
         const workshopWideSessions = allSessions
           .filter(s => workshopIds.includes(s.workshop_id) && (!selectedEvent || s.event_id === selectedEvent.id) && !directSessionIds.has(s.id))
           .map(s => ({ id: 'wa_' + s.id, staff_id: staffMember?.id, session_id: s.id, moment_id: null, shift_id: null, sessions: s, open_moments: null, staff_shifts: null }))
-        return [...directSessions, ...workshopWideSessions, ...myShiftAssignments]
+        return [...myDirectSessions, ...myDirectMoments, ...workshopWideSessions, ...myShiftAssignments]
       })()
-    : myShiftAssignments
+    : [...myDirectSessions, ...myDirectMoments, ...myShiftAssignments]
   const myGrouped = groupByDate(myAgendaAssignments)
   const myDates = Object.keys(myGrouped).sort()
 

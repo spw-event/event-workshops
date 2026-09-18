@@ -259,28 +259,59 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
   }
 
   async function checkPin() {
+    const trimmed = pin.trim()
+    if (!trimmed) return
     setLoading(true)
     setPinError('')
+
+    // Try email first, same lookup /login uses — only admin-level staff can
+    // get in this way; everyone else falls through to the PIN check below.
+    const { data: staffRows } = await supabase
+      .from('staff')
+      .select('*')
+      .ilike('email', trimmed)
+      .eq('is_active', true)
+      .limit(1)
+    const staffData = staffRows?.[0]
+    if (staffData && (staffData.is_super_admin || staffData.is_admin)) {
+      const resolvedRole = staffData.is_super_admin ? 'super' : 'admin'
+      localStorage.setItem('spw_staff_record', JSON.stringify(staffData))
+      localStorage.setItem('spw_staff_role', staffData.is_super_admin ? 'super_admin' : 'admin')
+      setStaffRecord(staffData)
+      setRole(resolvedRole)
+      if (resolvedRole === 'super') {
+        const { data: settings } = await supabase.from('admin_settings').select('*')
+        const map = {}
+        settings?.forEach(s => { map[s.key] = s.value })
+        setAdminSettings(map)
+      }
+      await loadAll()
+      setLoading(false)
+      return
+    }
+
+    // Not an admin email — fall back to the global admin/super-admin access
+    // codes, or an instructor PIN.
     const { data: settings } = await supabase.from('admin_settings').select('*')
     const map = {}
     settings?.forEach(s => { map[s.key] = s.value })
 
-    if (pin === map['super_admin_pin']) {
+    if (trimmed === map['super_admin_pin']) {
       setRole('super')
       setAdminSettings(map)
       await loadAll()
-    } else if (pin === map['admin_pin']) {
+    } else if (trimmed === map['admin_pin']) {
       setRole('admin')
       await loadAll()
     } else {
       const { data: instrPin } = await supabase
-        .from('instructor_pins').select('*, workshops(*)').eq('pin', pin).single()
+        .from('instructor_pins').select('*, workshops(*)').eq('pin', trimmed).single()
       if (instrPin) {
         setRole('instructor')
         setInstructorWorkshop(instrPin.workshops)
         await loadAll()
       } else {
-        setPinError('Incorrect PIN')
+        setPinError("We couldn't find that email or access code.")
       }
     }
     setLoading(false)
@@ -1675,22 +1706,23 @@ const filteredGuests = guests.filter(g => {
     )
   }
 
-  // ── PIN SCREEN ────────────────────────────────────────────
+  // ── LOGIN SCREEN ──────────────────────────────────────────
   if (!role) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', fontFamily: 'sans-serif', padding: 24 }}>
       <div style={{ maxWidth: 320, width: '100%' }}>
         <div style={{ fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#888', marginBottom: 4 }}>Snow Peak USA</div>
         <div style={{ fontSize: 22, fontWeight: 500, marginBottom: 24 }}>Staff Access</div>
-        <input type="password" placeholder="Enter PIN" value={pin}
+        <input type="text" placeholder="Email or access code" value={pin}
           onChange={e => { setPin(e.target.value); setPinError('') }}
           onKeyDown={e => e.key === 'Enter' && checkPin()}
+          autoFocus
           style={{ ...inp, marginBottom: 8, fontSize: 15, padding: '10px 12px' }} />
         {pinError && <div style={{ color: '#e74c3c', fontSize: 13, marginBottom: 8 }}>{pinError}</div>}
-        <button onClick={checkPin} disabled={loading} style={{ width: '100%', padding: '10px', borderRadius: 8, border: 'none', background: '#1a1a1a', color: '#fff', fontSize: 15, cursor: 'pointer' }}>
+        <button onClick={checkPin} disabled={loading || !pin.trim()} style={{ width: '100%', padding: '10px', borderRadius: 8, border: 'none', background: '#1a1a1a', color: '#fff', fontSize: 15, cursor: 'pointer' }}>
           {loading ? 'Checking...' : 'Sign In'}
         </button>
         <div style={{ textAlign: 'center', marginTop: 16 }}>
-          <a href="/login" style={{ fontSize: 12, color: '#888' }}>Staff? Sign in with email →</a>
+          <a href="/login" style={{ fontSize: 12, color: '#888' }}>Not an admin? Go to staff sign-in →</a>
         </div>
       </div>
     </div>

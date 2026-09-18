@@ -888,7 +888,7 @@ export default function Home() {
     setRegistering(session.id)
     setMessage(null)
 
-    const creditsRemaining = partyCreditsTotal - partyCreditsUsed
+    const creditsRemaining = Math.max(0, partyCreditsTotal - partyCreditsUsed)
     if (creditCost > creditsRemaining) {
       setMessage({ type: 'error', text: 'Not enough credits for that many people.' })
       setRegistering(null)
@@ -907,18 +907,19 @@ export default function Home() {
       .from('registrations')
       .insert({ guest_id: guest.id, session_id: session.id, event_id: selectedEvent.id, status: 'confirmed', party_size: partySize })
     if (!regError) {
-      // Update credits in guest_events
-      await supabase
-        .from('guest_events')
-        .update({ credits_used: partyCreditsUsed + creditCost })
-        .eq('guest_id', guest.id)
-        .eq('event_id', selectedEvent.id)
+      // Credits are deducted atomically by a database trigger on this insert
+      // (apply_registration_credit_delta) — no client-side credits_used write here.
       setMessage({ type: 'success', text: 'Reserved ' + partySize + ' spot' + (partySize > 1 ? 's' : '') + ' successfully.' })
       await refreshAll()
     } else if (regError.message?.includes('SESSION_FULL')) {
       // Someone else took the remaining spot(s) between our last refresh and
       // this click — the database's own capacity check caught it.
       setMessage({ type: 'error', text: 'That spot was just taken by someone else — please choose another time.' })
+      await refreshAll()
+    } else if (regError.message?.includes('CREDITS_EXCEEDED')) {
+      // Another registration from this guest (e.g. a second tab) used up the
+      // remaining credits between our last refresh and this click.
+      setMessage({ type: 'error', text: 'Not enough credits remaining for that many people.' })
       await refreshAll()
     } else {
       setMessage({ type: 'error', text: 'Could not register. Please try again.' })
@@ -945,13 +946,9 @@ export default function Home() {
       return
     }
 
+    // Credits are refunded atomically by a database trigger on this delete
+    // (apply_registration_credit_delta) — no client-side credits_used write here.
     const creditRefund = (session?.workshops?.credit_cost || 1) * (partySize || 1)
-    await supabase
-      .from('guest_events')
-      .update({ credits_used: Math.max(0, partyCreditsUsed - creditRefund) })
-      .eq('guest_id', guest.id)
-      .eq('event_id', selectedEvent.id)
-
     setMessage({ type: 'success', text: 'Spot released. ' + creditRefund + ' credit' + (creditRefund > 1 ? 's' : '') + ' returned.' })
     await refreshAll()
   }
@@ -1110,7 +1107,7 @@ export default function Home() {
     return datePart + ' at ' + timePart + (abbr ? ' ' + abbr : '')
   }
 
-  const creditsRemaining = partyCreditsTotal - partyCreditsUsed
+  const creditsRemaining = Math.max(0, partyCreditsTotal - partyCreditsUsed)
   const confirmedRegs = registrations.filter(r => r.status === 'confirmed')
   const sortKey = (date, time) => (date || '9999-99-99') + ' ' + (time || '99:99:99')
 
