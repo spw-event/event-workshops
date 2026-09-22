@@ -1335,6 +1335,14 @@ export default function Home() {
               {guestEvent.booking_summary}
             </div>
           )}
+
+          {guest?.name && (
+            <div style={{ marginTop: 10 }}>
+              <button onClick={signOutGuest} style={{ background: 'none', border: 'none', fontSize: 11, color: '#C8C4BC', cursor: 'pointer', padding: 4 }}>
+                Not you? Sign out
+              </button>
+            </div>
+          )}
         </div>
 
         {message && (
