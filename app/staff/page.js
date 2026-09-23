@@ -241,7 +241,10 @@ export default function StaffPage() {
     const evtsFromAssignments = (evts || []).filter(e => assignmentEventIds.has(e.id) && !seaEventIds.has(e.id))
     const evtsWithA = [...seaEvts, ...evtsFromAssignments].filter(e => !e.is_archived)
     setEventsWithAssignments(evtsWithA)
-    const initial = evtsWithA.find(e => e.status === 'active') || evtsWithA[0] || (evts || []).find(e => !e.is_archived) || null
+    // No fallback to "just pick some event" here — a staff member with zero
+    // assignments should see the app's own empty states, not another event's
+    // real schedule/guide/gear details they were never actually staffed on.
+    const initial = evtsWithA.find(e => e.status === 'active') || evtsWithA[0] || null
     selectEvent(initial)
   }
 
