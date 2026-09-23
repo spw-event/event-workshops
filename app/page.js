@@ -1025,40 +1025,76 @@ export default function Home() {
       .in('gear_item_id', eventItemIds)
   }
 
-  function generateMomentICS(moment) {
-    if (!moment?.date || !moment?.start_time) return
-    const formatDT = (d, t) => new Date(d + 'T' + t).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z'
-    const endTime = moment.end_time || moment.start_time
-    const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'BEGIN:VEVENT',
-      'DTSTART:' + formatDT(moment.date, moment.start_time),
-      'DTEND:' + formatDT(moment.date, endTime),
-      'SUMMARY:' + moment.name + ' — ' + (selectedEvent?.name || 'Snow Peak'),
-      'LOCATION:' + (moment.location || ''),
-      'END:VEVENT', 'END:VCALENDAR'].join('\n')
+  function formatICSDateTime(d, t) {
+    return new Date(d + 'T' + t).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z'
+  }
+
+  function buildVEvent(dtStart, dtEnd, summary, location) {
+    return ['BEGIN:VEVENT',
+      'DTSTART:' + dtStart,
+      'DTEND:' + dtEnd,
+      'SUMMARY:' + summary,
+      'LOCATION:' + (location || ''),
+      'END:VEVENT']
+  }
+
+  // A single anchor/blob/click download — used for both one-event and
+  // multi-event (whole-day) calendar files. Triggering several of these in a
+  // tight loop (the old per-item approach for "add day to calendar") gets
+  // throttled by the browser, which silently drops all but the last one —
+  // so a whole day must always be bundled into one VCALENDAR with multiple
+  // VEVENTs instead of one download per item.
+  function downloadICS(filename, veventLines) {
+    const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', ...veventLines, 'END:VCALENDAR'].join('\n')
     const blob = new Blob([ics], { type: 'text/calendar' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = moment.name.replace(/\s+/g, '-') + '.ics'
+    a.download = filename
     a.click()
+  }
+
+  function generateMomentICS(moment) {
+    if (!moment?.date || !moment?.start_time) return
+    const endTime = moment.end_time || moment.start_time
+    const summary = moment.name + ' — ' + (selectedEvent?.name || 'Snow Peak')
+    downloadICS(moment.name.replace(/\s+/g, '-') + '.ics',
+      buildVEvent(formatICSDateTime(moment.date, moment.start_time), formatICSDateTime(moment.date, endTime), summary, moment.location))
   }
 
   function generateICS(session) {
     if (!session) return
     const name = session.workshops?.name || 'Workshop'
-    const formatDT = (d, t) => new Date(d + 'T' + t).toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z'
-    const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'BEGIN:VEVENT',
-      'DTSTART:' + formatDT(session.date, session.start_time),
-      'DTEND:' + formatDT(session.date, session.end_time),
-      'SUMMARY:' + name + ' — ' + (selectedEvent?.name || 'Snow Peak'),
-      'LOCATION:' + (session.workshops?.location || ''),
-      'END:VEVENT', 'END:VCALENDAR'].join('\n')
-    const blob = new Blob([ics], { type: 'text/calendar' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = name.replace(/\s+/g, '-') + '.ics'
-    a.click()
+    const summary = name + ' — ' + (selectedEvent?.name || 'Snow Peak')
+    downloadICS(name.replace(/\s+/g, '-') + '.ics',
+      buildVEvent(formatICSDateTime(session.date, session.start_time), formatICSDateTime(session.date, session.end_time), summary, session.workshops?.location))
+  }
+
+  function generateDayICS(day, dayItems) {
+    const veventLines = []
+    dayItems.forEach(item => {
+      if (item.type === 'reg') {
+        const session = item.data.sessions
+        if (!session?.date || !session?.start_time) return
+        const name = session.workshops?.name || 'Workshop'
+        veventLines.push(...buildVEvent(
+          formatICSDateTime(session.date, session.start_time),
+          formatICSDateTime(session.date, session.end_time),
+          name + ' — ' + (selectedEvent?.name || 'Snow Peak'),
+          session.workshops?.location
+        ))
+      } else if (item.data.date && item.data.start_time) {
+        const moment = item.data
+        veventLines.push(...buildVEvent(
+          formatICSDateTime(moment.date, moment.start_time),
+          formatICSDateTime(moment.date, moment.end_time || moment.start_time),
+          moment.name + ' — ' + (selectedEvent?.name || 'Snow Peak'),
+          moment.location
+        ))
+      }
+    })
+    if (veventLines.length === 0) return
+    downloadICS('agenda-' + day + '.ics', veventLines)
   }
 
   function isRegistered(sessionId) {
@@ -1244,6 +1280,11 @@ export default function Home() {
         <div style={{ fontSize: 32, marginBottom: 12 }}>🔒</div>
         <div style={{ fontSize: 18, fontWeight: 500, marginBottom: 8 }}>Access Required</div>
         <div style={{ color: '#8C8C8C', lineHeight: 1.6 }}>{error}</div>
+        <div style={{ marginTop: 24 }}>
+          <button onClick={signOutGuest} style={{ background: 'none', border: 'none', fontSize: 11, color: '#C8C4BC', cursor: 'pointer', padding: 4 }}>
+            Not you? Sign out
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -1830,12 +1871,7 @@ export default function Home() {
                           )
                         })}
 
-                        <button onClick={() => {
-                          dayItems.forEach(item => {
-                            if (item.type === 'reg') generateICS(item.data.sessions)
-                            else if (item.data.date && item.data.start_time) generateMomentICS(item.data)
-                          })
-                        }} style={{ marginTop: 4, fontSize: 12, letterSpacing: '0.04em', padding: '9px 16px', cursor: 'pointer', borderTop: '0.5px solid #E8E4DE', borderRight: '0.5px solid #E8E4DE', borderBottom: '0.5px solid #E8E4DE', borderLeft: '0.5px solid #E8E4DE', borderRadius: 4, background: 'transparent', color: '#8C8C8C', width: '100%' }}>
+                        <button onClick={() => generateDayICS(day, dayItems)} style={{ marginTop: 4, fontSize: 12, letterSpacing: '0.04em', padding: '9px 16px', cursor: 'pointer', borderTop: '0.5px solid #E8E4DE', borderRight: '0.5px solid #E8E4DE', borderBottom: '0.5px solid #E8E4DE', borderLeft: '0.5px solid #E8E4DE', borderRadius: 4, background: 'transparent', color: '#8C8C8C', width: '100%' }}>
                           + Add {new Date(day + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} to calendar
                         </button>
                       </div>
