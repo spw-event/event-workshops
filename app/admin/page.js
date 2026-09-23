@@ -85,7 +85,6 @@ export default function AdminPage() {
   const [registrations, setRegistrations] = useState([])
   const [events, setEvents] = useState([])
   const [selectedEvent, setSelectedEvent] = useState(null)
-  const [adminSettings, setAdminSettings] = useState({})
   const [guestEvents, setGuestEvents] = useState([])
 
   const [newGuest, setNewGuest] = useState({ name: '', email: '', ticket_type_id: '' })
@@ -145,9 +144,6 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
     workshops: false, moments: false, shifts: false, gear: false, info: false, partners: false, resources: false
   })
   const [archivedEventsOpen, setArchivedEventsOpen] = useState(false)
-
-  const [settingsMsg, setSettingsMsg] = useState(null)
-  const [newPins, setNewPins] = useState({ super_admin_pin: '', admin_pin: '' })
 
   const [checkinSearch, setCheckinSearch] = useState('')
 
@@ -214,7 +210,7 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
   const [staffMembers, setStaffMembers] = useState([])
   const [staffEventAssns, setStaffEventAssns] = useState([])
   const [staffWorkshopAssns, setStaffWorkshopAssns] = useState([])
-  const [newStaffMember, setNewStaffMember] = useState({ name: '', pin: '', email: '', phone: '', notes: '', is_vendor: false, vendor_name: '', is_checkin: false })
+  const [newStaffMember, setNewStaffMember] = useState({ name: '', pin: '', email: '', phone: '', notes: '', is_vendor: false, vendor_name: '', is_checkin: false, is_admin: false, is_super_admin: false })
   const [staffMemberMsg, setStaffMemberMsg] = useState(null)
   const [addingStaffMember, setAddingStaffMember] = useState(false)
   const [staffDeleteInput, setStaffDeleteInput] = useState({})
@@ -264,8 +260,8 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
     setLoading(true)
     setPinError('')
 
-    // Try email first, same lookup /login uses — only admin-level staff can
-    // get in this way; everyone else falls through to the PIN check below.
+    // Admin access is granted purely by the is_admin/is_super_admin flag on a
+    // staff record (set in Staff & Vendors) — there's no separate shared code.
     const { data: staffRows } = await supabase
       .from('staff')
       .select('*')
@@ -279,40 +275,20 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
       localStorage.setItem('spw_staff_role', staffData.is_super_admin ? 'super_admin' : 'admin')
       setStaffRecord(staffData)
       setRole(resolvedRole)
-      if (resolvedRole === 'super') {
-        const { data: settings } = await supabase.from('admin_settings').select('*')
-        const map = {}
-        settings?.forEach(s => { map[s.key] = s.value })
-        setAdminSettings(map)
-      }
       await loadAll()
       setLoading(false)
       return
     }
 
-    // Not an admin email — fall back to the global admin/super-admin access
-    // codes, or an instructor PIN.
-    const { data: settings } = await supabase.from('admin_settings').select('*')
-    const map = {}
-    settings?.forEach(s => { map[s.key] = s.value })
-
-    if (trimmed === map['super_admin_pin']) {
-      setRole('super')
-      setAdminSettings(map)
-      await loadAll()
-    } else if (trimmed === map['admin_pin']) {
-      setRole('admin')
+    // Not an admin email — fall back to an instructor PIN (read-only roster view).
+    const { data: instrPin } = await supabase
+      .from('instructor_pins').select('*, workshops(*)').eq('pin', trimmed).single()
+    if (instrPin) {
+      setRole('instructor')
+      setInstructorWorkshop(instrPin.workshops)
       await loadAll()
     } else {
-      const { data: instrPin } = await supabase
-        .from('instructor_pins').select('*, workshops(*)').eq('pin', trimmed).single()
-      if (instrPin) {
-        setRole('instructor')
-        setInstructorWorkshop(instrPin.workshops)
-        await loadAll()
-      } else {
-        setPinError("We couldn't find that email or access code.")
-      }
+      setPinError("We couldn't find that email or access code.")
     }
     setLoading(false)
   }
@@ -1570,11 +1546,13 @@ const filteredGuests = guests.filter(g => {
       is_vendor: newStaffMember.is_vendor,
       vendor_name: newStaffMember.is_vendor ? (newStaffMember.vendor_name || null) : null,
       is_checkin: newStaffMember.is_checkin,
+      is_admin: newStaffMember.is_admin,
+      is_super_admin: newStaffMember.is_super_admin,
       is_active: true
     })
     if (!error) {
       setStaffMemberMsg({ type: 'success', text: 'Staff member added.' })
-      setNewStaffMember({ name: '', pin: '', email: '', phone: '', notes: '', is_vendor: false, vendor_name: '', is_checkin: false })
+      setNewStaffMember({ name: '', pin: '', email: '', phone: '', notes: '', is_vendor: false, vendor_name: '', is_checkin: false, is_admin: false, is_super_admin: false })
       await loadAll()
     } else setStaffMemberMsg({ type: 'error', text: error.message.includes('unique') ? 'PIN already in use.' : 'Could not add staff member.' })
     setAddingStaffMember(false)
@@ -1592,6 +1570,8 @@ const filteredGuests = guests.filter(g => {
       is_vendor: editStaffMemberData.is_vendor,
       vendor_name: editStaffMemberData.is_vendor ? (editStaffMemberData.vendor_name || null) : null,
       is_checkin: editStaffMemberData.is_checkin,
+      is_admin: editStaffMemberData.is_admin,
+      is_super_admin: editStaffMemberData.is_super_admin,
     }).eq('id', editingStaffMember.id)
     if (!error) {
       setEditingStaffMember(null)
@@ -1658,15 +1638,6 @@ const filteredGuests = guests.filter(g => {
   async function removeStaffWorkshopAssn(id) {
     await supabase.from('staff_workshop_assignments').delete().eq('id', id)
     await loadAll()
-  }
-
-  async function savePins() {
-    const updates = []
-    if (newPins.super_admin_pin) updates.push(supabase.from('admin_settings').update({ value: newPins.super_admin_pin }).eq('key', 'super_admin_pin'))
-    if (newPins.admin_pin) updates.push(supabase.from('admin_settings').update({ value: newPins.admin_pin }).eq('key', 'admin_pin'))
-    await Promise.all(updates)
-    setSettingsMsg({ type: 'success', text: 'PINs updated.' })
-    setNewPins({ super_admin_pin: '', admin_pin: '' })
   }
 
   // ── STYLES ────────────────────────────────────────────────
@@ -1767,7 +1738,7 @@ const filteredGuests = guests.filter(g => {
 
   // ── MAIN ADMIN ────────────────────────────────────────────
   const adminTabs = ['dashboard', 'check-in', 'guests', 'program', 'camp guide', 'staff & vendors']
-  const superTabs = [...adminTabs, 'ticket types', 'events', 'settings']
+  const superTabs = [...adminTabs, 'ticket types', 'events']
   const tabs = role === 'super' ? superTabs : adminTabs
 
   return (
@@ -3933,6 +3904,27 @@ const filteredGuests = guests.filter(g => {
                   <input type="checkbox" checked={newStaffMember.is_checkin} onChange={e => setNewStaffMember(s => ({ ...s, is_checkin: e.target.checked }))} style={{ cursor: 'pointer' }} />
                   Guest Services
                 </label>
+                {role === 'super' && (
+                  <>
+                    <div style={{ ...fw, maxWidth: 220, marginBottom: 8 }}>
+                      <label style={lbl}>Access level</label>
+                      <select
+                        value={newStaffMember.is_super_admin ? 'super' : newStaffMember.is_admin ? 'admin' : 'staff'}
+                        onChange={e => setNewStaffMember(s => ({ ...s, is_admin: e.target.value === 'admin', is_super_admin: e.target.value === 'super' }))}
+                        style={inp}
+                      >
+                        <option value="staff">Staff</option>
+                        <option value="admin">Admin</option>
+                        <option value="super">Super Admin</option>
+                      </select>
+                    </div>
+                    <div style={{ marginBottom: 12, padding: 10, background: '#f9f9f9', borderRadius: 8, fontSize: 11, color: '#666', lineHeight: 1.7 }}>
+                      <strong>Super Admin</strong> — ticket types, events, staff access levels, everything<br />
+                      <strong>Admin</strong> — guests, workshops, staff & vendors, dashboard<br />
+                      <strong>Staff</strong> — no admin panel access (uses the staff dashboard instead)
+                    </div>
+                  </>
+                )}
                 <button onClick={createStaffMember} disabled={addingStaffMember} style={{ ...btn('#1a1a1a', '#fff'), width: '100%', padding: '10px' }}>
                   {addingStaffMember ? 'Adding…' : 'Add staff member'}
                 </button>
@@ -3972,6 +3964,20 @@ const filteredGuests = guests.filter(g => {
                           <input type="checkbox" checked={!!editStaffMemberData.is_checkin} onChange={e => setEditStaffMemberData(d => ({ ...d, is_checkin: e.target.checked }))} style={{ cursor: 'pointer' }} />
                           Guest Services
                         </label>
+                        {role === 'super' && (
+                          <div style={{ ...fw, maxWidth: 220, marginBottom: 12 }}>
+                            <label style={lbl}>Access level</label>
+                            <select
+                              value={editStaffMemberData.is_super_admin ? 'super' : editStaffMemberData.is_admin ? 'admin' : 'staff'}
+                              onChange={e => setEditStaffMemberData(d => ({ ...d, is_admin: e.target.value === 'admin', is_super_admin: e.target.value === 'super' }))}
+                              style={inp}
+                            >
+                              <option value="staff">Staff</option>
+                              <option value="admin">Admin</option>
+                              <option value="super">Super Admin</option>
+                            </select>
+                          </div>
+                        )}
                         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                           <button onClick={updateStaffMember} disabled={savingStaffMember} style={btn('#1a1a1a', '#fff')}>{savingStaffMember ? 'Saving…' : 'Save'}</button>
                           <button onClick={() => { setEditingStaffMember(null); setEditStaffMemberData({}) }} style={btn('#fff')}>Cancel</button>
@@ -3984,6 +3990,8 @@ const filteredGuests = guests.filter(g => {
                           <div style={{ fontSize: 14, fontWeight: 500 }}>{sm.name}</div>
                           {sm.is_vendor && <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: 20, background: '#FFF8E8', color: '#9a5a18', border: '0.5px solid #E8C080' }}>Partner</span>}
                           {sm.is_checkin && <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: 20, background: '#EEF3EE', color: '#2D4A2D', border: '0.5px solid #C0D4C0' }}>Guest Services</span>}
+                          {sm.is_super_admin && <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: 20, background: '#1a1a1a', color: '#fff' }}>Super Admin</span>}
+                          {!sm.is_super_admin && sm.is_admin && <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: 20, background: '#EFEDEA', color: '#1a1a1a', border: '0.5px solid #D0CAC4' }}>Admin</span>}
                           {sm.is_active === false && <span style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', padding: '2px 8px', borderRadius: 20, background: '#F5F0E8', color: '#B5622A' }}>Inactive</span>}
                         </div>
                         <div style={{ fontSize: 12, color: '#888', marginBottom: 2 }}>
@@ -3993,7 +4001,7 @@ const filteredGuests = guests.filter(g => {
                         {sm.notes && <div style={{ fontSize: 12, color: '#aaa', fontStyle: 'italic' }}>{sm.notes}</div>}
                       </div>
                       <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center', flexWrap: 'wrap' }}>
-                        <button onClick={() => { setEditingStaffMember(sm); setEditStaffMemberData({ name: sm.name, pin: sm.pin, email: sm.email || '', phone: sm.phone || '', notes: sm.notes || '', is_vendor: sm.is_vendor || false, vendor_name: sm.vendor_name || '', is_checkin: sm.is_checkin || false }); setStaffMemberMsg(null) }} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px' }}>Edit</button>
+                        <button onClick={() => { setEditingStaffMember(sm); setEditStaffMemberData({ name: sm.name, pin: sm.pin, email: sm.email || '', phone: sm.phone || '', notes: sm.notes || '', is_vendor: sm.is_vendor || false, vendor_name: sm.vendor_name || '', is_checkin: sm.is_checkin || false, is_admin: sm.is_admin || false, is_super_admin: sm.is_super_admin || false }); setStaffMemberMsg(null) }} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px' }}>Edit</button>
                         <button
                           onClick={() => toggleStaffActive(sm.id, sm.is_active !== false)}
                           disabled={togglingStaffId === sm.id}
@@ -4245,27 +4253,6 @@ const filteredGuests = guests.filter(g => {
         </div>
       )}
 
-      {/* ── SETTINGS ── */}
-      {activeTab === 'settings' && role === 'super' && (
-        <div style={{ maxWidth: 480 }}>
-          <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 14 }}>Change PINs</div>
-          <Msg msg={settingsMsg} />
-          <div style={fw}>
-            <label style={lbl}>New super admin PIN</label>
-            <input type="text" value={newPins.super_admin_pin} onChange={e => setNewPins(p => ({ ...p, super_admin_pin: e.target.value }))} placeholder="Leave blank to keep current" style={inp} />
-          </div>
-          <div style={fw}>
-            <label style={lbl}>New admin PIN</label>
-            <input type="text" value={newPins.admin_pin} onChange={e => setNewPins(p => ({ ...p, admin_pin: e.target.value }))} placeholder="Leave blank to keep current" style={inp} />
-          </div>
-          <button onClick={savePins} style={{ ...btn('#1a1a1a', '#fff'), padding: '10px 24px' }}>Save PINs</button>
-          <div style={{ marginTop: 24, padding: 14, background: '#f9f9f9', borderRadius: 8, fontSize: 12, color: '#666', lineHeight: 1.8 }}>
-            <strong>Super admin</strong> — ticket types, events, PINs, everything<br />
-            <strong>Admin</strong> — guests, workshops, staff & vendors, dashboard<br />
-            <strong>Vendor/instructor</strong> — read-only roster for their workshop
-          </div>
-        </div>
-      )}
     </div>
   )
 }
