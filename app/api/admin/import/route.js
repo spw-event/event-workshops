@@ -1,5 +1,5 @@
 import { checkAuth, json, resolveEvent } from '@/lib/adminApi'
-import { applyPlan, planImport, summarize, validateInput } from '@/lib/adminImport'
+import { applyPlan, planImport, resultsForLog, summarize, validateInput } from '@/lib/adminImport'
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin'
 
 // POST /api/admin/import — token-authenticated bulk load of staff, workshops +
@@ -45,7 +45,7 @@ export async function POST(request) {
         source: input.source,
         dry_run: false,
         summary: failure ? { ...response.summary, error: failure.message } : response.summary,
-        results: plan.results
+        results: resultsForLog(plan.results)
       })
       if (logError) response.log_warning = `Writes completed but import_log insert failed: ${logError.message}`
     }
