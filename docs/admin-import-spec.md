@@ -1,6 +1,6 @@
 # Admin Import API: Spec
 
-Goal: let Claude (Cowork or Claude Code) load staff/vendor contacts, workshops + sessions, and partners into the SPW app safely, without handing out database keys.
+Goal: let Claude (Cowork or Claude Code) load staff/vendor contacts, workshops + sessions, partners, open moments, and staff shifts into the SPW app safely, without handing out database keys.
 
 ## Scope
 
@@ -22,11 +22,13 @@ Goal: let Claude (Cowork or Claude Code) load staff/vendor contacts, workshops +
 
 ```json
 {
-  "event": "SPW Big Sur",
+  "event": "Snow Peak Way Big Sur",
   "dry_run": true,
   "staff": [],
   "workshops": [],
-  "partners": []
+  "partners": [],
+  "moments": [],
+  "shifts": []
 }
 ```
 
@@ -87,10 +89,34 @@ Goal: let Claude (Cowork or Claude Code) load staff/vendor contacts, workshops +
 
 - Match key: (event_id, lowercase name).
 
+### moments[] → `open_moments`
+
+```json
+{ "name": "Campfire Social", "date": "2026-10-17", "start_time": "19:00", "end_time": "21:00",
+  "moment_type": "optional", "location": "Fire Circle", "description": "...", "hours_text": null, "staff_notes": null }
+```
+
+- `moment_type`: `mandatory` | `optional` | `amenity` | `staff_only` (default `optional`).
+- `date`, `start_time`, `end_time` are optional; amenities can use `hours_text` instead.
+- Match key: (event_id, lowercase name, date, start_time). Changing date or start time therefore adds a new moment; a new moment on a day that already has a same-named one gets a dry-run warning.
+- Updatable on a match: `end_time`, `moment_type`, `location`, `description`, `hours_text`, `staff_notes`.
+
+### shifts[] → `staff_shifts`
+
+```json
+{ "title": "Site Setup", "date": "2026-10-16", "start_time": "08:00", "end_time": "12:00",
+  "shift_type": "setup", "location": "Main Lot", "description": "..." }
+```
+
+- `date` maps to `staff_shifts.shift_date`. `date` and `start_time` required; `end_time` required for a new shift.
+- `shift_type`: `setup` | `breakdown` | `travel` | `driving` | `general` | `briefing` (default `general`).
+- Match key: (event_id, lowercase title, date, start_time), with the same same-day warning as moments.
+- Updatable on a match: `end_time`, `shift_type`, `location`, `description`.
+
 ## Behavior
 
 - Validate everything first. If any record fails validation, return 400 with per-record errors and write nothing.
-- Process in order: partners → staff → workshops/sessions.
+- Process in order: partners → staff → workshops/sessions → moments → shifts.
 - Never delete anything. Removal stays manual in the admin UI.
 - Partial updates: fields not in the payload are left alone. `null` explicitly clears a field.
 
@@ -131,7 +157,7 @@ alter table import_log enable row level security;
 
 ## Export
 
-`GET /api/admin/export?event=...` with the same auth. Returns the event's staff (no PINs), workshops + sessions with current registration counts, and partners, in the same shape as the import body. Lets Claude diff before writing.
+`GET /api/admin/export?event=...` with the same auth. Returns the event's staff (no PINs), workshops + sessions with current registration counts, partners, moments, and shifts, in the same shape as the import body. Lets Claude diff before writing.
 
 ## Testing
 

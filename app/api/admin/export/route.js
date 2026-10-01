@@ -2,9 +2,10 @@ import { checkAuth, fetchAll, json, loadEventData, normalizeTime, resolveEvent }
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin'
 
 // GET /api/admin/export?event=<id|name> — read-only snapshot of an event's
-// staff (no PINs), workshops + sessions with registered seat counts, and
-// partners, in the same shape POST /api/admin/import accepts, so it can be
-// diffed against or edited and posted back.
+// staff (no PINs), workshops + sessions with registered seat counts,
+// partners, open moments and staff shifts, in the same shape
+// POST /api/admin/import accepts, so it can be diffed against or edited and
+// posted back.
 export async function GET(request) {
   const unauthorized = checkAuth(request)
   if (unauthorized) return unauthorized
@@ -60,12 +61,40 @@ export async function GET(request) {
       .map(p => ({ name: p.name, description: p.description, website_url: p.website_url, logo_url: p.logo_url, sort_order: p.sort_order }))
       .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name))
 
+    const bySchedule = (a, b) => `${a.date || ''} ${a.start_time || ''}`.localeCompare(`${b.date || ''} ${b.start_time || ''}`)
+    const moments = data.moments
+      .map(m => ({
+        name: m.name,
+        date: m.date,
+        start_time: normalizeTime(m.start_time),
+        end_time: normalizeTime(m.end_time),
+        moment_type: m.moment_type,
+        location: m.location,
+        description: m.description,
+        hours_text: m.hours_text,
+        staff_notes: m.staff_notes
+      }))
+      .sort((a, b) => bySchedule(a, b) || a.name.localeCompare(b.name))
+    const shifts = data.shifts
+      .map(s => ({
+        title: s.title,
+        date: s.shift_date,
+        start_time: normalizeTime(s.start_time),
+        end_time: normalizeTime(s.end_time),
+        shift_type: s.shift_type,
+        location: s.location,
+        description: s.description
+      }))
+      .sort((a, b) => bySchedule(a, b) || a.title.localeCompare(b.title))
+
     return json({
       event: event.id,
       event_name: event.name,
       staff: staffRows,
       workshops: workshopList,
-      partners
+      partners,
+      moments,
+      shifts
     })
   } catch (err) {
     return json({ error: err.message || 'Export failed.' }, 500)
