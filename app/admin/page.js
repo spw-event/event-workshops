@@ -2,6 +2,9 @@
 
 import { useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
+import { getSignedInStaff, isAdminRecord, resetStaffPassword, signOutStaff } from '../../lib/staffAuth'
+
+const DEFAULT_STAFF_PASSWORD = 'spw1958' // must match lib/staffAdmin.js
 
 const INFO_SECTION_ICONS = ['📍', '☕', '🚗', '📋', '📞', '🏕️', '⚠️', '🛁', '🛒', '📄']
 
@@ -71,12 +74,9 @@ function orderGearCategories(categories, categoryRows, eventId) {
 
 export default function AdminPage() {
   const [role, setRole] = useState(null)
-  const [staffRecord, setStaffRecord] = useState(null) // set when auto-authenticated via /login instead of PIN
-  const [pin, setPin] = useState('')
-  const [pinError, setPinError] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [staffRecord, setStaffRecord] = useState(null) // staff row linked to the signed-in Supabase Auth user
+  const [authState, setAuthState] = useState('checking') // 'checking' | 'ok' | 'denied'
   const [activeTab, setActiveTab] = useState('dashboard')
-  const [instructorWorkshop, setInstructorWorkshop] = useState(null)
 
   const [guests, setGuests] = useState([])
   const [ticketTypes, setTicketTypes] = useState([])
@@ -215,6 +215,8 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
   const [addingStaffMember, setAddingStaffMember] = useState(false)
   const [staffDeleteInput, setStaffDeleteInput] = useState({})
   const [togglingStaffId, setTogglingStaffId] = useState(null)
+  const [resettingStaffId, setResettingStaffId] = useState(null)
+  const [staffResetMsg, setStaffResetMsg] = useState({}) // staff id → { type, text }
   const [editingStaffMember, setEditingStaffMember] = useState(null)
   const [editStaffMemberData, setEditStaffMemberData] = useState({})
   const [savingStaffMember, setSavingStaffMember] = useState(false)
@@ -230,68 +232,23 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
   const [openResourceCategory, setOpenResourceCategory] = useState(null)
 
   // ── AUTH ─────────────────────────────────────────────────
-  // Auto-login from the unified /login entry — falls back to the PIN screen
-  // below when neither key is present, or the stored role isn't admin-level.
+  // Requires a Supabase Auth session linked to an active admin staff row.
+  // This only decides what to render — the database's RLS policies are what
+  // actually enforce admin-only writes and guest-data reads.
   useEffect(() => {
-    const storedRecord = localStorage.getItem('spw_staff_record')
-    const storedRole = localStorage.getItem('spw_staff_role')
-    if (!storedRecord || (storedRole !== 'super_admin' && storedRole !== 'admin')) return
-    try {
-      const record = JSON.parse(storedRecord)
-      setStaffRecord(record)
-      setRole(storedRole === 'super_admin' ? 'super' : 'admin')
-      loadAll()
-    } catch {
-      localStorage.removeItem('spw_staff_record')
-      localStorage.removeItem('spw_staff_role')
-    }
+    getSignedInStaff()
+      .then(record => {
+        if (!record) { window.location.href = '/login'; return }
+        if (!isAdminRecord(record)) { setStaffRecord(record); setAuthState('denied'); return }
+        setStaffRecord(record)
+        setRole(record.is_super_admin ? 'super' : 'admin')
+        setAuthState('ok')
+        loadAll()
+      })
+      .catch(() => { window.location.href = '/login' })
   }, [])
 
-  function adminSignOut() {
-    localStorage.removeItem('spw_staff_record')
-    localStorage.removeItem('spw_staff_role')
-    setStaffRecord(null)
-    setRole(null)
-  }
-
-  async function checkPin() {
-    const trimmed = pin.trim()
-    if (!trimmed) return
-    setLoading(true)
-    setPinError('')
-
-    // Admin access is granted purely by the is_admin/is_super_admin flag on a
-    // staff record (set in Staff & Vendors) — there's no separate shared code.
-    const { data: staffRows } = await supabase
-      .from('staff')
-      .select('*')
-      .ilike('email', trimmed)
-      .eq('is_active', true)
-      .limit(1)
-    const staffData = staffRows?.[0]
-    if (staffData && (staffData.is_super_admin || staffData.is_admin)) {
-      const resolvedRole = staffData.is_super_admin ? 'super' : 'admin'
-      localStorage.setItem('spw_staff_record', JSON.stringify(staffData))
-      localStorage.setItem('spw_staff_role', staffData.is_super_admin ? 'super_admin' : 'admin')
-      setStaffRecord(staffData)
-      setRole(resolvedRole)
-      await loadAll()
-      setLoading(false)
-      return
-    }
-
-    // Not an admin email — fall back to an instructor PIN (read-only roster view).
-    const { data: instrPin } = await supabase
-      .from('instructor_pins').select('*, workshops(*)').eq('pin', trimmed).single()
-    if (instrPin) {
-      setRole('instructor')
-      setInstructorWorkshop(instrPin.workshops)
-      await loadAll()
-    } else {
-      setPinError("We couldn't find that email or access code.")
-    }
-    setLoading(false)
-  }
+  const adminSignOut = signOutStaff
 
   async function loadAll() {
     const [
@@ -1583,6 +1540,22 @@ const filteredGuests = guests.filter(g => {
     setSavingStaffMember(false)
   }
 
+  // Admins and check-in staff sign in with a password. This creates their
+  // sign-in, or resets a forgotten one, to the default; they're made to pick
+  // a new password the next time they sign in.
+  async function resetStaffSignIn(sm) {
+    if (!window.confirm(`Reset ${sm.name}'s password to ${DEFAULT_STAFF_PASSWORD}?\n\nTheir current password stops working right away. They'll choose a new one the next time they sign in.`)) return
+    setResettingStaffId(sm.id)
+    const result = await resetStaffPassword(sm.id)
+    setStaffResetMsg(m => ({
+      ...m,
+      [sm.id]: result.error
+        ? { type: 'error', text: result.error }
+        : { type: 'success', text: `${result.created ? 'Sign-in created' : 'Password reset'}. ${sm.name} can now sign in with ${sm.email} and ${DEFAULT_STAFF_PASSWORD}, then choose a new password.` }
+    }))
+    setResettingStaffId(null)
+  }
+
   async function toggleStaffActive(id, current) {
     setTogglingStaffId(id)
     await supabase.from('staff').update({ is_active: !current }).eq('id', id)
@@ -1677,64 +1650,27 @@ const filteredGuests = guests.filter(g => {
     )
   }
 
-  // ── LOGIN SCREEN ──────────────────────────────────────────
-  if (!role) return (
+  // ── AUTH GATE ─────────────────────────────────────────────
+  // Signed-out visitors are sent to /login by the effect above; this covers
+  // the brief check, and signed-in staff who aren't admins.
+  if (authState !== 'ok') return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', fontFamily: 'sans-serif', padding: 24 }}>
-      <div style={{ maxWidth: 320, width: '100%' }}>
-        <div style={{ fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#888', marginBottom: 4 }}>Snow Peak USA</div>
-        <div style={{ fontSize: 22, fontWeight: 500, marginBottom: 24 }}>Staff Access</div>
-        <input type="text" placeholder="Email or access code" value={pin}
-          onChange={e => { setPin(e.target.value); setPinError('') }}
-          onKeyDown={e => e.key === 'Enter' && checkPin()}
-          autoFocus
-          style={{ ...inp, marginBottom: 8, fontSize: 15, padding: '10px 12px' }} />
-        {pinError && <div style={{ color: '#e74c3c', fontSize: 13, marginBottom: 8 }}>{pinError}</div>}
-        <button onClick={checkPin} disabled={loading || !pin.trim()} style={{ width: '100%', padding: '10px', borderRadius: 8, border: 'none', background: '#1a1a1a', color: '#fff', fontSize: 15, cursor: 'pointer' }}>
-          {loading ? 'Checking...' : 'Sign In'}
-        </button>
-        <div style={{ textAlign: 'center', marginTop: 16 }}>
-          <a href="/login" style={{ fontSize: 12, color: '#888' }}>Not an admin? Go to staff sign-in →</a>
-        </div>
+      <div style={{ maxWidth: 320, width: '100%', textAlign: 'center' }}>
+        <div style={{ fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#888', marginBottom: 12 }}>Snow Peak USA</div>
+        {authState === 'checking' ? (
+          <div style={{ fontSize: 14, color: '#888' }}>Checking access…</div>
+        ) : (
+          <>
+            <div style={{ fontSize: 15, marginBottom: 16 }}>This account doesn&apos;t have admin access.</div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+              <a href="/staff" style={{ ...btn('#1a1a1a', '#fff'), textDecoration: 'none' }}>Go to staff app</a>
+              <button onClick={adminSignOut} style={btn('#fff')}>Sign out</button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   )
-
-  // ── INSTRUCTOR VIEW ───────────────────────────────────────
-  if (role === 'instructor') {
-    const mySessions = sessions.filter(s => s.workshop_id === instructorWorkshop?.id)
-    return (
-      <div style={{ fontFamily: 'sans-serif', maxWidth: 680, margin: '0 auto', padding: '24px 16px' }}>
-        <div style={{ fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#888', marginBottom: 4 }}>Instructor View · Read Only</div>
-        <div style={{ fontSize: 22, fontWeight: 500, marginBottom: 4 }}>{instructorWorkshop?.name}</div>
-        {instructorWorkshop?.location && <div style={{ fontSize: 13, color: '#888', marginBottom: 4 }}>📍 {instructorWorkshop.location}</div>}
-        <div style={{ fontSize: 13, color: '#888', marginBottom: 24 }}>{instructorWorkshop?.instructor}</div>
-        {mySessions.map(session => {
-          const confirmed = registrations.filter(r => r.session_id === session.id && r.status === 'confirmed')
-          const enrolled = confirmed.reduce((s, r) => s + (r.party_size || 1), 0)
-          return (
-            <div key={session.id} style={card}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-                <div style={{ fontSize: 15, fontWeight: 500 }}>{formatTime(session.start_time)} – {formatTime(session.end_time)}</div>
-                <div style={{ fontSize: 13, color: enrolled >= session.capacity ? '#c0392b' : '#888' }}>{enrolled} / {session.capacity}</div>
-              </div>
-              {confirmed.length === 0 ? (
-                <div style={{ fontSize: 13, color: '#aaa' }}>No registrations yet</div>
-              ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                  {confirmed.map(r => (
-                    <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 10px', background: '#f9f9f9', borderRadius: 6, fontSize: 13 }}>
-                      <span>{r.guests?.name}</span>
-                      {r.party_size > 1 && <span style={{ color: '#888' }}>party of {r.party_size}</span>}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )
-        })}
-      </div>
-    )
-  }
 
   // ── MAIN ADMIN ────────────────────────────────────────────
   const adminTabs = ['dashboard', 'check-in', 'guests', 'program', 'camp guide', 'staff & vendors']
@@ -3999,8 +3935,18 @@ const filteredGuests = guests.filter(g => {
                           {sm.is_vendor && sm.vendor_name ? ' · ' + sm.vendor_name : ''}
                         </div>
                         {sm.notes && <div style={{ fontSize: 12, color: '#aaa', fontStyle: 'italic' }}>{sm.notes}</div>}
+                        {staffResetMsg[sm.id] && (
+                          <div style={{ fontSize: 12, marginTop: 6, lineHeight: 1.5, color: staffResetMsg[sm.id].type === 'error' ? '#c0392b' : '#2D4A2D' }}>
+                            {staffResetMsg[sm.id].text}
+                          </div>
+                        )}
                       </div>
                       <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center', flexWrap: 'wrap' }}>
+                        {(sm.is_admin || sm.is_super_admin || sm.is_checkin) && sm.is_active !== false && sm.email && (!sm.is_super_admin || role === 'super') && (
+                          <button onClick={() => resetStaffSignIn(sm)} disabled={resettingStaffId === sm.id} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px' }}>
+                            {resettingStaffId === sm.id ? '…' : 'Reset password'}
+                          </button>
+                        )}
                         <button onClick={() => { setEditingStaffMember(sm); setEditStaffMemberData({ name: sm.name, pin: sm.pin, email: sm.email || '', phone: sm.phone || '', notes: sm.notes || '', is_vendor: sm.is_vendor || false, vendor_name: sm.vendor_name || '', is_checkin: sm.is_checkin || false, is_admin: sm.is_admin || false, is_super_admin: sm.is_super_admin || false }); setStaffMemberMsg(null) }} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px' }}>Edit</button>
                         <button
                           onClick={() => toggleStaffActive(sm.id, sm.is_active !== false)}

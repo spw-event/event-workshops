@@ -343,9 +343,11 @@ export default function Home() {
     }
 
     // Returning email-login visitor — skip straight to their schedule.
-    const storedGuestId = localStorage.getItem('spw_guest_id')
-    if (storedGuestId) {
-      loadDataByGuestId(storedGuestId, eventId)
+    // (Guests can't be looked up by id any more, so sessions saved before
+    // that change re-resolve through the email they also stored.)
+    const storedGuestEmail = localStorage.getItem('spw_guest_email')
+    if (storedGuestEmail) {
+      loadDataByStoredEmail(storedGuestEmail, eventId)
       return
     }
 
@@ -433,15 +435,15 @@ export default function Home() {
   // stored guest id, email). cacheKey is the guest's own token — every login
   // method still keys the offline cache off it since that's what the guest
   // row always has, regardless of how the guest signed in this time.
-  async function finishGuestLoad(guestData, eventId, cacheKey) {
+  // `session` is what guest_session()/guest_login() return: the guest (with
+  // ticket_types) plus their guest_events rows (with events). The guests,
+  // guest_events and registrations tables aren't readable by guests directly,
+  // so a guest can't list anyone else.
+  async function finishGuestLoad(session, eventId, cacheKey) {
+    const guestData = session.guest
+    const guestEvents = session.guest_events
     setGuest(guestData)
     setStoredToken(cacheKey)
-
-    // Load events this guest is invited to
-    const { data: guestEvents } = await supabase
-      .from('guest_events')
-      .select('*, events(*)')
-      .eq('guest_id', guestData.id)
 
     const events = (guestEvents || []).map(ge => ge.events).filter(Boolean)
     setMyEvents(events)
@@ -557,18 +559,16 @@ export default function Home() {
     }
 
     try {
-      const { data: guestData, error: guestError } = await supabase
-        .from('guests')
-        .select('*, ticket_types(*)')
-        .eq('token', token)
-        .single()
+      const { data: session, error: guestError } = await supabase
+        .rpc('guest_session', { p_token: token })
+      if (guestError) throw guestError
 
-      if (guestError || !guestData) {
+      if (!session) {
         setError('Invalid invite token. Please check your invitation email.')
         setLoading(false)
         return
       }
-      await finishGuestLoad(guestData, eventId, token)
+      await finishGuestLoad(session, eventId, token)
     } catch (err) {
       // Live fetch failed (network error, timeout, etc. — distinct from the
       // navigator.onLine check above, which only catches being fully offline).
@@ -596,8 +596,8 @@ export default function Home() {
   }
 
   // Returning email-login visitor — same flow as loadData, but looked up by
-  // the guest id stashed in localStorage instead of a token.
-  async function loadDataByGuestId(guestId, eventId) {
+  // the email stashed in localStorage instead of a token.
+  async function loadDataByStoredEmail(storedEmail, eventId) {
     setLoading(true)
 
     if (!navigator.onLine) {
@@ -622,23 +622,21 @@ export default function Home() {
     }
 
     try {
-      const { data: guestData, error: guestError } = await supabase
-        .from('guests')
-        .select('*, ticket_types(*)')
-        .eq('id', guestId)
-        .single()
+      const { data: session, error: guestError } = await supabase
+        .rpc('guest_login', { p_email: storedEmail })
+      if (guestError) throw guestError
 
-      if (guestError || !guestData) {
-        // Stale/invalid stored guest id — fall back to the email entry screen.
+      if (!session) {
+        // Stale/invalid stored email — fall back to the email entry screen.
         localStorage.removeItem('spw_guest_id')
         localStorage.removeItem('spw_guest_email')
         setLoading(false)
         setNeedsEmailLogin(true)
         return
       }
-      await finishGuestLoad(guestData, eventId, guestData.token)
+      await finishGuestLoad(session, eventId, session.guest.token)
     } catch (err) {
-      console.error('[loadDataByGuestId] fetch failed, falling back to schedule cache:', err)
+      console.error('[loadDataByStoredEmail] fetch failed, falling back to schedule cache:', err)
       const cached = localStorage.getItem(SCHEDULE_CACHE_KEY)
       if (cached) {
         try {
@@ -666,25 +664,21 @@ export default function Home() {
     setEmailError(null)
     setEmailSubmitting(true)
     try {
-      const { data, error: lookupError } = await supabase
-        .from('guests')
-        .select('*, ticket_types(*)')
-        .ilike('email', email)
-        .limit(1)
+      const { data: session, error: lookupError } = await supabase
+        .rpc('guest_login', { p_email: email })
 
-      const guestData = data?.[0]
+      const guestData = session?.guest
       if (lookupError || !guestData) {
         setEmailError("We couldn't find that email. Check your invitation or contact info@snowpeak.com")
         setEmailSubmitting(false)
         return
       }
 
-      localStorage.setItem('spw_guest_id', guestData.id)
       localStorage.setItem('spw_guest_email', guestData.email)
       setNeedsEmailLogin(false)
       setEmailSubmitting(false)
       setLoading(true)
-      await finishGuestLoad(guestData, null, guestData.token)
+      await finishGuestLoad(session, null, guestData.token)
     } catch (err) {
       console.error('[loadDataByEmail] lookup failed:', err)
       setEmailError('Something went wrong. Please try again.')
@@ -726,11 +720,7 @@ export default function Home() {
 
     // Registrations for this guest and event
     const { data: regData } = await supabase
-      .from('registrations')
-      .select('*, sessions(*, workshops(*))')
-      .eq('guest_id', guestData.id)
-      .eq('event_id', event.id)
-      .neq('status', 'cancelled')
+      .rpc('guest_registrations', { p_token: guestData.token, p_event_id: event.id })
     setRegistrations(regData || [])
 
     // Open moments for this event
@@ -852,13 +842,8 @@ export default function Home() {
       setOpensAt(null)
     }
 
-    const geRecord = await supabase
-      .from('guest_events')
-      .select('*')
-      .eq('guest_id', guest.id)
-      .eq('event_id', event.id)
-      .single()
-    setGuestEvent(geRecord.data || null)
+    const { data: session } = await supabase.rpc('guest_session', { p_token: guest.token })
+    setGuestEvent(session?.guest_events?.find(ge => ge.event_id === event.id) || null)
 
     await loadEventData(guest, event)
   }
@@ -904,8 +889,7 @@ export default function Home() {
     }
 
     const { error: regError } = await supabase
-      .from('registrations')
-      .insert({ guest_id: guest.id, session_id: session.id, event_id: selectedEvent.id, status: 'confirmed', party_size: partySize })
+      .rpc('guest_register', { p_token: guest.token, p_session_id: session.id, p_event_id: selectedEvent.id, p_party_size: partySize })
     if (!regError) {
       // Credits are deducted atomically by a database trigger on this insert
       // (apply_registration_credit_delta) — no client-side credits_used write here.
@@ -937,9 +921,7 @@ export default function Home() {
     }
 
     const { error: delError } = await supabase
-      .from('registrations')
-      .delete()
-      .eq('id', registrationId)
+      .rpc('guest_cancel', { p_token: guest.token, p_registration_id: registrationId })
 
     if (delError) {
       setMessage({ type: 'error', text: 'Could not cancel. Please try again.' })

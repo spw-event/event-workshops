@@ -2,15 +2,16 @@
 
 import { useEffect, useState } from 'react'
 import { supabase } from '../../lib/supabase'
+import { clearStoredStaff, getSignedInStaff, lookupStaff, needsPassword, readStoredStaff, signOutStaff, storeEmailOnlyStaff } from '../../lib/staffAuth'
 
 export default function StaffPage() {
-  const [loginInput, setLoginInput] = useState('')
-  const [loginError, setLoginError] = useState('')
-  const [loading, setLoading] = useState(false)
   // Starts true unconditionally (not read from localStorage) so server and
   // client render the same thing on first paint — resolved inside the mount
   // effect below, which only ever runs client-side.
-  const [checkingStoredPin, setCheckingStoredPin] = useState(true)
+  const [checkingAuth, setCheckingAuth] = useState(true)
+  // True with a Supabase Auth session (admins, check-in staff) — only then is
+  // guest data (check-in, guest lookup, full rosters) readable.
+  const [signedIn, setSignedIn] = useState(false)
   const [staffMember, setStaffMember] = useState(null)
   const [activeTab, setActiveTab] = useState('schedule')
 
@@ -32,9 +33,6 @@ export default function StaffPage() {
   const [events, setEvents] = useState([])
   const [selectedEvent, setSelectedEvent] = useState(null)
   const [eventsWithAssignments, setEventsWithAssignments] = useState([])
-
-  const [staffRole, setStaffRole] = useState(null) // 'staff' | 'instructor'
-  const [instructorSessions, setInstructorSessions] = useState([])
 
   const [expandedRosters, setExpandedRosters] = useState({})
   const [activeGuestLookup, setActiveGuestLookup] = useState(null)
@@ -62,113 +60,43 @@ export default function StaffPage() {
   // Schedule tab, staff mode — which item keys have their notes expanded
   const [expandedNotes, setExpandedNotes] = useState({})
 
-  // Persists whichever record just authenticated (from a staff-table row or
-  // an instructor_pins row) under the same unified keys /login writes.
-  function persistStaffAuth(record, role) {
-    localStorage.setItem('spw_staff_record', JSON.stringify(record))
-    localStorage.setItem('spw_staff_role', role)
-  }
-
-  function clearStaffAuth() {
-    // Guest localStorage keys (spw_guest_token etc) are intentionally untouched.
-    localStorage.removeItem('spw_staff_record')
-    localStorage.removeItem('spw_staff_role')
-    localStorage.removeItem('spw_staff_event_id')
-  }
-
+  // Two ways in (see lib/staffAuth.js): a Supabase Auth session for admins
+  // and check-in staff, or an email-only record for everyone else. Anyone
+  // else is sent to /login.
   useEffect(() => {
-    const storedRecord = localStorage.getItem('spw_staff_record')
-    if (!storedRecord) { setCheckingStoredPin(false); return }
-    let record
-    try {
-      record = JSON.parse(storedRecord)
-    } catch {
-      clearStaffAuth()
-      setCheckingStoredPin(false)
-      return
-    }
-    // instructor_pins rows have no is_active column at all — its presence on
-    // the parsed record is what tells the two tables apart.
-    const isStaffTableRecord = 'is_active' in record
-    if (isStaffTableRecord) {
-      if (!record.is_active) {
-        clearStaffAuth()
-        setCheckingStoredPin(false)
+    async function resolveStaff() {
+      const sessionRecord = await getSignedInStaff()
+      if (sessionRecord) {
+        setSignedIn(true)
+        setStaffMember(sessionRecord)
+        if (sessionRecord.is_checkin) setActiveTab('checkin')
+        await loadData(sessionRecord, true)
+        setCheckingAuth(false)
         return
       }
+      // Email-only: re-check the stored email so a deactivated (or since
+      // promoted-to-password) account doesn't keep working off a stale copy.
+      const stored = readStoredStaff()
+      const record = stored?.email ? await lookupStaff(stored.email) : null
+      if (!record || needsPassword(record)) {
+        clearStoredStaff()
+        window.location.href = '/login'
+        return
+      }
+      storeEmailOnlyStaff(record)
       setStaffMember(record)
-      setStaffRole('staff')
-      if (record.is_checkin) setActiveTab('checkin')
-      loadData(record).then(() => { setLoading(false); setCheckingStoredPin(false) })
-    } else {
-      setStaffMember(record)
-      setStaffRole('instructor')
-      loadInstructorData(record).then(() => { setLoading(false); setCheckingStoredPin(false) })
+      await loadData(record, false)
+      setCheckingAuth(false)
     }
+    resolveStaff().catch(() => { window.location.href = '/login' })
   }, [])
 
-  async function attemptLogin(inputValue) {
-    const trimmed = inputValue.trim()
-    if (!trimmed) return
-    setLoading(true)
-    setLoginError('')
+  const signOut = signOutStaff
 
-    // Staff table first, matched by email (case-insensitive) — this is the
-    // primary login path for Snow Peak staff, admins, and staff-table vendors.
-    const { data: staffRows, error: staffError } = await supabase
-      .from('staff')
-      .select('*')
-      .ilike('email', trimmed)
-      .eq('is_active', true)
-      .limit(1)
-    console.log('[attemptLogin] staff table query — data:', staffRows, 'error:', staffError)
-    const staffData = staffRows?.[0]
-
-    if (staffData) {
-      const role = staffData.is_super_admin ? 'super_admin' : staffData.is_admin ? 'admin' : staffData.is_vendor ? 'vendor' : 'staff'
-      persistStaffAuth(staffData, role)
-      setStaffMember(staffData)
-      setStaffRole('staff')
-      if (staffData.is_checkin) setActiveTab('checkin')
-      await loadData(staffData)
-      setLoading(false)
-      setCheckingStoredPin(false)
-      return
-    }
-
-    // Not found by email — fall back to instructor_pins, treating the input
-    // as a PIN. Preserves backwards compatibility for existing instructor
-    // records (e.g. Thaan) that were never migrated to the staff table.
-    const { data: instrRows, error: instrError } = await supabase
-      .from('instructor_pins')
-      .select('*, workshops(*)')
-      .eq('pin', trimmed)
-      .limit(1)
-    console.log('[attemptLogin] instructor_pins query — data:', instrRows, 'error:', instrError)
-    const instrData = instrRows?.[0]
-
-    if (instrData) {
-      persistStaffAuth(instrData, 'vendor')
-      setStaffMember(instrData)
-      setStaffRole('instructor')
-      await loadInstructorData(instrData)
-    } else {
-      setLoginError("We couldn't find that email. Contact your event coordinator for access.")
-    }
-    setLoading(false)
-    setCheckingStoredPin(false)
-  }
-
-  function checkLogin() {
-    attemptLogin(loginInput)
-  }
-
-  function signOut() {
-    clearStaffAuth()
-    window.location.href = '/login'
-  }
-
-  async function loadData(staffRecord) {
+  // signedInSession: admins/check-in staff read guest data straight from the
+  // tables (RLS allows it). Email-only staff get registrations from
+  // staff_registrations(), which names guests only on their own sessions.
+  async function loadData(staffRecord, signedInSession = signedIn) {
     const [
       { data: myA, error: myAError },
       { data: regs },
@@ -185,14 +113,17 @@ export default function StaffPage() {
       { data: shifts },
       { data: allSA },
       { data: allWA },
-      { data: guestsData }
+      { data: guestsData },
+      { data: staffDirectory }
     ] = await Promise.all([
       supabase.from('staff_assignments')
         .select('id, staff_id, session_id, moment_id, shift_id, sessions(id, date, start_time, end_time, capacity, event_id, workshops(name, location)), open_moments(id, name, date, start_time, end_time, location, moment_type, event_id), staff_shifts(id, title, shift_date, start_time, end_time, location, shift_type, description, event_id)')
         .eq('staff_id', staffRecord.id),
-      supabase.from('registrations').select('*, guests(id, name)').eq('status', 'confirmed'),
+      signedInSession
+        ? supabase.from('registrations').select('*, guests(id, name)').eq('status', 'confirmed')
+        : supabase.rpc('staff_registrations', { p_email: staffRecord.email }),
       supabase.from('events').select('*').order('start_date'),
-      supabase.from('guest_events').select('*, guests(id, name)'),
+      signedInSession ? supabase.from('guest_events').select('*, guests(id, name)') : { data: [] },
       supabase.from('sessions').select('*, workshops(name, location, instructor, description)').order('date').order('start_time'),
       supabase.from('open_moments').select('*').order('date').order('start_time'),
       supabase.from('staff_event_assignments').select('*, events(*)').eq('staff_id', staffRecord.id),
@@ -203,14 +134,17 @@ export default function StaffPage() {
       supabase.from('gear_items').select('*').order('sort_order'),
       supabase.from('staff_shifts').select('*').order('shift_date').order('start_time'),
       supabase.from('staff_assignments')
-        .select('id, staff_id, session_id, moment_id, shift_id, staff(id, name, is_vendor)')
+        .select('id, staff_id, session_id, moment_id, shift_id')
         .not('staff_id', 'is', null),
-      supabase.from('staff_workshop_assignments').select('id, staff_id, workshop_id, staff(id, name, is_vendor)'),
-      supabase.from('guests').select('*, ticket_types(*)').order('name')
+      supabase.from('staff_workshop_assignments').select('id, staff_id, workshop_id'),
+      signedInSession ? supabase.from('guests').select('*, ticket_types(*)').order('name') : { data: [] },
+      // The staff table itself isn't readable without admin access; this
+      // returns just id/name/is_vendor for showing who else is assigned.
+      supabase.rpc('staff_directory')
     ])
-    console.log('[loadData] staffRecord.id:', staffRecord.id)
-    console.log('[loadData] myA count:', myA?.length ?? 'null', 'error:', myAError ? JSON.stringify(myAError) : null)
-    if (myA?.length) console.log('[loadData] myA[0]:', JSON.stringify(myA[0]))
+    if (myAError) console.error('[loadData] staff_assignments error:', myAError)
+    const staffById = Object.fromEntries((staffDirectory || []).map(s => [s.id, s]))
+    const withStaff = rows => (rows || []).map(r => ({ ...r, staff: staffById[r.staff_id] || null }))
     setMyAssignments(myA || [])
     setRegistrations(regs || [])
     setEvents(evts || [])
@@ -222,8 +156,8 @@ export default function StaffPage() {
     setEventPartners(partners || [])
     setGearItems(gear || [])
     setAllShifts(shifts || [])
-    setAllStaffAssignments(allSA || [])
-    setAllWorkshopAssns(allWA || [])
+    setAllStaffAssignments(withStaff(allSA))
+    setAllWorkshopAssns(withStaff(allWA))
     setMyWorkshopAssns(swa || [])
     setGuests(guestsData || [])
     // Union: staff_event_assignments + events derived from actual assignments
@@ -253,18 +187,6 @@ export default function StaffPage() {
   function selectEvent(ev) {
     setSelectedEvent(ev)
     if (ev) localStorage.setItem('spw_staff_event_id', ev.id)
-  }
-
-  async function loadInstructorData(instrRecord) {
-    const [{ data: regs }, { data: sess }] = await Promise.all([
-      supabase.from('registrations').select('*, guests(id, name)').eq('status', 'confirmed'),
-      supabase.from('sessions')
-        .select('*, workshops(name, location)')
-        .eq('workshop_id', instrRecord.workshop_id)
-        .order('date').order('start_time')
-    ])
-    setRegistrations(regs || [])
-    setInstructorSessions(sess || [])
   }
 
   function formatTime(t) {
@@ -639,10 +561,12 @@ export default function StaffPage() {
               style={{ ...btn('#fff'), fontSize: 12, padding: '4px 12px' }}>
               {rosterOpen ? 'Hide roster' : 'View roster'}
             </button>
-            <button onClick={() => toggleLookup(session.id)}
-              style={{ ...btn(lookupOpen ? '#1a1a1a' : '#fff', lookupOpen ? '#fff' : '#1a1a1a'), fontSize: 12, padding: '4px 12px' }}>
-              Guest Lookup
-            </button>
+            {signedIn && (
+              <button onClick={() => toggleLookup(session.id)}
+                style={{ ...btn(lookupOpen ? '#1a1a1a' : '#fff', lookupOpen ? '#fff' : '#1a1a1a'), fontSize: 12, padding: '4px 12px' }}>
+                Guest Lookup
+              </button>
+            )}
           </div>
           {rosterOpen && (
             <div style={{ marginTop: 10 }}>
@@ -650,13 +574,13 @@ export default function StaffPage() {
                 ? <div style={{ fontSize: 13, color: '#aaa' }}>No registrations yet.</div>
                 : sessionRegs.map(r => (
                   <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 10px', background: '#F7F6F4', borderRadius: 8, fontSize: 13, marginBottom: 4 }}>
-                    <span>{r.guests?.name}</span>
+                    <span>{r.guests?.name ?? 'Guest'}</span>
                     {r.party_size > 1 && <span style={{ color: '#8C8C8C' }}>party of {r.party_size}</span>}
                   </div>
                 ))}
             </div>
           )}
-          {renderGuestLookup(session.id)}
+          {signedIn && renderGuestLookup(session.id)}
           {renderStaffModeExtras(getAssignedStaff(a => a.session_id === session.id, session.workshop_id), session.staff_notes, 'session_' + session.id)}
         </div>
       )
@@ -1150,99 +1074,9 @@ export default function StaffPage() {
     )
   }
 
-  // Instructor fallback view (read-only roster for vendor/workshop instructors)
-  if (staffMember && staffRole === 'instructor') return (
-    <div style={{ fontFamily: 'sans-serif', maxWidth: 720, width: '100%', margin: '0 auto', padding: '24px 16px', color: '#1a1a1a', background: '#FAFAF8', minHeight: '100vh' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 24, flexWrap: 'wrap' }}>
-        <div>
-          <div style={{ fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#8C8C8C', marginBottom: 4 }}>
-            Snow Peak Way &middot; Instructor
-          </div>
-          <div style={{ fontSize: 20, fontWeight: 500 }}>{staffMember.name}</div>
-          {staffMember.workshops && <div style={{ fontSize: 13, color: '#8C8C8C', marginTop: 2 }}>{staffMember.workshops.name}</div>}
-        </div>
-        <button onClick={signOut} style={btn('#fff')}>Sign out</button>
-      </div>
-      {instructorSessions.length === 0 ? (
-        <div style={{ textAlign: 'center', color: '#8C8C8C', padding: '48px 0', fontSize: 14 }}>No sessions scheduled.</div>
-      ) : (
-        instructorSessions.map(s => {
-          const sessionRegs = registrations.filter(r => r.session_id === s.id)
-          const totalGuests = sessionRegs.reduce((acc, r) => acc + (r.party_size || 1), 0)
-          const isExpanded = expandedRosters[s.id]
-          return (
-            <div key={s.id} style={{ background: '#fff', border: '0.5px solid #e8e8e8', borderRadius: 12, padding: '14px 18px', marginBottom: 10, borderLeft: '3px solid #2D4A2D' }}>
-              <div style={{ fontSize: 13, color: '#8C8C8C', marginBottom: 4 }}>
-                {formatDate(s.date)} &middot; {formatTime(s.start_time)} – {formatTime(s.end_time)}
-              </div>
-              <div style={{ fontSize: 15, fontWeight: 500 }}>{s.workshops?.name || 'Workshop'}</div>
-              {s.workshops?.location && <div style={{ fontSize: 13, color: '#8C8C8C', marginTop: 2 }}>📍 {s.workshops.location}</div>}
-              <div style={{ marginTop: 10, paddingTop: 10, borderTop: '0.5px solid #F0EDE8', display: 'flex', alignItems: 'center', gap: 10 }}>
-                <span style={{ fontSize: 13, color: '#555', flexGrow: 1 }}>{totalGuests} guest{totalGuests !== 1 ? 's' : ''} registered</span>
-                <button onClick={() => setExpandedRosters(r => ({ ...r, [s.id]: !isExpanded }))}
-                  style={{ padding: '4px 12px', borderRadius: 8, border: '0.5px solid #d0d0d0', background: '#fff', fontSize: 12, cursor: 'pointer' }}>
-                  {isExpanded ? 'Hide roster' : 'View roster'}
-                </button>
-              </div>
-              {isExpanded && (
-                <div style={{ marginTop: 8 }}>
-                  {sessionRegs.length === 0
-                    ? <div style={{ fontSize: 13, color: '#aaa' }}>No registrations yet.</div>
-                    : sessionRegs.map(r => (
-                      <div key={r.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 10px', background: '#F7F6F4', borderRadius: 8, fontSize: 13, marginBottom: 4 }}>
-                        <span>{r.guests?.name}</span>
-                        {r.party_size > 1 && <span style={{ color: '#8C8C8C' }}>party of {r.party_size}</span>}
-                      </div>
-                    ))}
-                </div>
-              )}
-            </div>
-          )
-        })
-      )}
-    </div>
-  )
-
-
-  if (checkingStoredPin) return (
+  // Blank while the mount effect resolves who this is (or redirects to /login).
+  if (checkingAuth || !staffMember) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', fontFamily: 'sans-serif', background: '#FAFAF8' }} />
-  )
-
-  if (!staffMember) return (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', fontFamily: 'sans-serif', background: '#FAFAF8', padding: 24 }}>
-      <div style={{ textAlign: 'center', maxWidth: 320, width: '100%' }}>
-        <img src="/spw-logo.png" alt="Snow Peak Way" style={{ width: 120, display: 'block', margin: '0 auto 40px' }} />
-        <div style={{ fontSize: 11, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#8C8C8C', marginBottom: 16 }}>
-          Snow Peak Way &middot; Staff
-        </div>
-        <div style={{ fontSize: 13, color: '#8C8C8C', marginBottom: 28 }}>Enter your email to access your schedule</div>
-        <form onSubmit={e => { e.preventDefault(); !loading && checkLogin() }}>
-          <input
-            type="text" placeholder="Email or access code" value={loginInput}
-            onChange={e => { setLoginInput(e.target.value); setLoginError('') }}
-            autoFocus
-            style={{
-              width: '100%', boxSizing: 'border-box', padding: 12,
-              borderRadius: 8, border: '0.5px solid #E8E4DE', background: '#fff',
-              fontSize: 15, color: '#1a1a1a', marginBottom: 16, fontFamily: 'inherit'
-            }}
-          />
-          {loginError && <div style={{ fontSize: 12, color: '#c0392b', textAlign: 'left', marginBottom: 16, lineHeight: 1.5 }}>{loginError}</div>}
-          <button
-            type="submit"
-            disabled={loading || !loginInput.trim()}
-            style={{
-              width: '100%', padding: 12, borderRadius: 8, border: 'none',
-              background: '#1a1a1a', color: '#fff', fontSize: 15, fontWeight: 500,
-              cursor: loading ? 'default' : 'pointer',
-              opacity: loading || !loginInput.trim() ? 0.6 : 1
-            }}
-          >
-            {loading ? 'Checking…' : 'Continue'}
-          </button>
-        </form>
-      </div>
-    </div>
   )
 
   const isVendor = !!staffMember.is_vendor
@@ -1376,10 +1210,12 @@ export default function StaffPage() {
                             style={{ ...btn('#fff'), fontSize: 12, padding: '4px 12px' }}>
                             {isExpanded ? 'Hide roster' : 'View roster'}
                           </button>
-                          <button onClick={() => toggleLookup(a.id)}
-                            style={{ ...btn(lookupOpen ? '#1a1a1a' : '#fff', lookupOpen ? '#fff' : '#1a1a1a'), fontSize: 12, padding: '4px 12px' }}>
-                            Guest Lookup
-                          </button>
+                          {signedIn && (
+                            <button onClick={() => toggleLookup(a.id)}
+                              style={{ ...btn(lookupOpen ? '#1a1a1a' : '#fff', lookupOpen ? '#fff' : '#1a1a1a'), fontSize: 12, padding: '4px 12px' }}>
+                              Guest Lookup
+                            </button>
+                          )}
                         </div>
                         {isExpanded && (
                           <div style={{ marginTop: 10 }}>
@@ -1393,7 +1229,7 @@ export default function StaffPage() {
                               ))}
                           </div>
                         )}
-                        {renderGuestLookup(a.id)}
+                        {signedIn && renderGuestLookup(a.id)}
                       </div>
                     )}
                   </div>
