@@ -505,6 +505,26 @@ const [newTicketType, setNewTicketType] = useState({ name: '', display_name: '',
     }).filter(Boolean)
   }
 
+  const emailKeyOf = email => (email || '').trim().toLowerCase()
+
+  // What bulkImport() will do with one CSV row, so the preview can say so.
+  // Existing guests are matched by email; their name and ticket type are left
+  // as they are (only the event link is added), which the preview calls out.
+  function bulkRowStatus(row) {
+    const tt = ticketTypes.find(t => t.name.toLowerCase() === row.ticket_type_name.toLowerCase())
+    if (!tt) return { kind: 'error', text: '✗ ticket type not found: ' + row.ticket_type_name }
+    const existing = guests.find(g => emailKeyOf(g.email) === emailKeyOf(row.email))
+    if (!existing) return { kind: 'new', text: 'New guest · ' + tt.name }
+    const onEvent = selectedEvent && guestEvents.some(ge => ge.guest_id === existing.id && ge.event_id === selectedEvent.id)
+    const unchanged = []
+    if (existing.ticket_type_id !== tt.id) {
+      unchanged.push('ticket type stays ' + (ticketTypes.find(t => t.id === existing.ticket_type_id)?.name || 'unset'))
+    }
+    if (existing.name.trim() !== row.name.trim()) unchanged.push('name stays "' + existing.name + '"')
+    const base = onEvent ? 'Already on this event' : 'Existing guest · will be added to this event'
+    return { kind: onEvent ? 'same' : 'link', text: base + (unchanged.length ? ' (' + unchanged.join(', ') + ')' : '') }
+  }
+
   // Event-filtered data
   const filteredSessions = selectedEvent
     ? sessions.filter(s => s.event_id === selectedEvent.id)
@@ -643,11 +663,11 @@ const filteredGuests = guests.filter(g => {
     // are also handled correctly, not just ones that already existed
     // before the import started.
     const knownGuestsByEmail = {}
-    guests.forEach(g => { knownGuestsByEmail[g.email.toLowerCase()] = g })
+    guests.forEach(g => { knownGuestsByEmail[emailKeyOf(g.email)] = g })
     const knownGuestEventKeys = new Set(guestEvents.map(ge => ge.guest_id + '|' + ge.event_id))
 
     for (const row of bulkPreview) {
-      const emailKey = row.email.trim().toLowerCase()
+      const emailKey = emailKeyOf(row.email)
       const tt = ticketTypes.find(t => t.name.toLowerCase() === row.ticket_type_name.toLowerCase())
       if (!tt) {
         failedRows.push({ name: row.name, email: row.email, reason: 'Ticket type not found: ' + row.ticket_type_name })
@@ -1886,19 +1906,29 @@ const filteredGuests = guests.filter(g => {
                   </button>
                 )}
               </div>
-              {bulkPreview.length > 0 && (
-                <div style={{ marginTop: 12 }}>
-                  {bulkPreview.map((row, i) => {
-                    const tt = ticketTypes.find(t => t.name.toLowerCase() === row.ticket_type_name.toLowerCase())
-                    return (
-                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 10px', background: tt ? '#f0faf4' : '#fff0f0', borderRadius: 6, fontSize: 12, marginBottom: 4 }}>
+              {bulkPreview.length > 0 && (() => {
+                const statuses = bulkPreview.map(bulkRowStatus)
+                const count = kind => statuses.filter(s => s.kind === kind).length
+                const tone = {
+                  new: { bg: '#f0faf4', color: '#1a7a4a' },
+                  link: { bg: '#EEF0F8', color: '#2060B0' },
+                  same: { bg: '#f9f9f9', color: '#888' },
+                  error: { bg: '#fff0f0', color: '#c0392b' }
+                }
+                return (
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ fontSize: 12, color: '#555', marginBottom: 8 }}>
+                      {count('new')} new · {count('link')} existing to add to {selectedEvent?.name || 'this event'} · {count('same')} already on this event{count('error') ? ' · ' + count('error') + ' with errors' : ''}
+                    </div>
+                    {bulkPreview.map((row, i) => (
+                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '7px 10px', background: tone[statuses[i].kind].bg, borderRadius: 6, fontSize: 12, marginBottom: 4 }}>
                         <span>{row.name} · {row.email}</span>
-                        <span style={{ color: tt ? '#1a7a4a' : '#c0392b' }}>{tt ? row.ticket_type_name : '✗ not found'}</span>
+                        <span style={{ color: tone[statuses[i].kind].color, textAlign: 'right' }}>{statuses[i].text}</span>
                       </div>
-                    )
-                  })}
-                </div>
-              )}
+                    ))}
+                  </div>
+                )
+              })()}
 
               {/* ── Detailed import results ── */}
               {bulkResults && (
