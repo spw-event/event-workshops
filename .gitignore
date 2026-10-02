@@ -141,3 +141,6 @@ dist
 .yarn/install-state.gz
 .pnp.*
 .vercel
+
+# Admin API exports (contain staff contact details)
+docs/exports/
