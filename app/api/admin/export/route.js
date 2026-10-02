@@ -3,7 +3,7 @@ import { getSupabaseAdmin } from '@/lib/supabaseAdmin'
 
 // GET /api/admin/export?event=<id|name> — read-only snapshot of an event's
 // staff (no PINs), workshops + sessions with registered seat counts,
-// partners, open moments and staff shifts, in the same shape
+// partners, open moments, staff shifts, and shift/session assignments, in the same shape
 // POST /api/admin/import accepts, so it can be diffed against or edited and
 // posted back.
 export async function GET(request) {
@@ -87,14 +87,62 @@ export async function GET(request) {
       }))
       .sort((a, b) => bySchedule(a, b) || a.title.localeCompare(b.title))
 
+    // Current shift/session assignments, keyed the way the import matches
+    // them (staff email + title/workshop + date + start time).
+    const assignedStaffIds = [...new Set(data.staffAssignments.map(a => a.staff_id))]
+    const emailById = new Map()
+    for (let i = 0; i < assignedStaffIds.length; i += 100) {
+      const rows = await fetchAll(() => db.from('staff')
+        .select('id, email')
+        .in('id', assignedStaffIds.slice(i, i + 100))
+        .order('id'))
+      for (const r of rows) emailById.set(r.id, r.email)
+    }
+    const shiftById = new Map(data.shifts.map(s => [s.id, s]))
+    const sessionById = new Map(data.sessions.map(s => [s.id, s]))
+    const assignments = []
+    const listed = new Set()
+    let withoutEmail = 0
+    let momentAssignments = 0
+    let duplicates = 0
+    const add = entry => {
+      const k = JSON.stringify(entry)
+      if (listed.has(k)) { duplicates++; return }
+      listed.add(k)
+      assignments.push(entry)
+    }
+    for (const a of data.staffAssignments) {
+      if (a.moment_id) { momentAssignments++; continue }
+      const email = emailById.get(a.staff_id)
+      if (!email) { withoutEmail++; continue }
+      if (a.shift_id && shiftById.has(a.shift_id)) {
+        const s = shiftById.get(a.shift_id)
+        add({ email: email.trim().toLowerCase(), shift: { title: s.title, date: s.shift_date, start_time: normalizeTime(s.start_time) } })
+      } else if (a.session_id && sessionById.get(a.session_id)?.workshops) {
+        const s = sessionById.get(a.session_id)
+        add({ email: email.trim().toLowerCase(), session: { workshop: s.workshops.name, date: s.date, start_time: normalizeTime(s.start_time) } })
+      }
+    }
+    const assignmentSortKey = a => {
+      const t = a.shift || a.session
+      return `${t.date} ${t.start_time} ${a.shift ? t.title : t.workshop} ${a.email}`
+    }
+    assignments.sort((a, b) => assignmentSortKey(a).localeCompare(assignmentSortKey(b)))
+    const exportNotes = []
+    if (momentAssignments) exportNotes.push(`${momentAssignments} moment assignment(s) not listed: the import doesn't support moment assignments`)
+    if (withoutEmail) exportNotes.push(`${withoutEmail} assignment(s) not listed: the staff member has no email`)
+    if (duplicates) exportNotes.push(`${duplicates} duplicate assignment row(s) listed once; remove the extras in the admin page`)
+
     return json({
       event: event.id,
       event_name: event.name,
+      ...(exportNotes.length ? { export_notes: exportNotes } : {}),
       staff: staffRows,
       workshops: workshopList,
       partners,
       moments,
-      shifts
+      shifts,
+      assignments
     })
   } catch (err) {
     return json({ error: err.message || 'Export failed.' }, 500)

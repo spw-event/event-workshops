@@ -1,6 +1,6 @@
 # Admin Import API: Spec
 
-Goal: let Claude (Cowork or Claude Code) load staff/vendor contacts, workshops + sessions, partners, open moments, and staff shifts into the SPW app safely, without handing out database keys.
+Goal: let Claude (Cowork or Claude Code) load staff/vendor contacts, workshops + sessions, partners, open moments, staff shifts, and staff assignments into the SPW app safely, without handing out database keys.
 
 ## Scope
 
@@ -28,7 +28,8 @@ Goal: let Claude (Cowork or Claude Code) load staff/vendor contacts, workshops +
   "workshops": [],
   "partners": [],
   "moments": [],
-  "shifts": []
+  "shifts": [],
+  "assignments": []
 }
 ```
 
@@ -113,10 +114,25 @@ Goal: let Claude (Cowork or Claude Code) load staff/vendor contacts, workshops +
 - Match key: (event_id, lowercase title, date, start_time), with the same same-day warning as moments.
 - Updatable on a match: `end_time`, `shift_type`, `location`, `description`.
 
+### assignments[] → `staff_assignments` (+ `staff_event_assignments`)
+
+```json
+{ "email": "sean@snowpeak.com", "shift": { "title": "Nighttime Volume Sweep", "date": "2026-10-16", "start_time": "22:00" } }
+{ "email": "yui@snowpeak.com", "session": { "workshop": "Fly Fishing for Beginners", "date": "2026-10-17", "start_time": "09:00" } }
+```
+
+- Each entry needs `email` and exactly one of `shift` or `session` (moment assignments aren't supported).
+- Staff: matched by lowercase email against all staff, including staff created under `staff[]` in the same request.
+- Shift: matched within the event on (lowercase title, date, start_time), the shift import's key. Session: matched on (lowercase workshop name, date, start_time) among this event's workshops. Shifts and sessions created in the same request can be targeted.
+- A staff member or target that can't be found (or matches more than one record) is a 400 for the whole request; nothing is written.
+- An assignment that already exists is `unchanged`. Never removes assignments — that stays in the admin UI. No database uniqueness is enforced, so the import is what avoids duplicates.
+- A staff member not yet on the event roster is added to it (result shows `adds_to_event_roster: true`).
+- Warnings, not errors: the new assignment's time overlaps another of that person's assignments on this event (existing shifts, sessions, or moments, or an earlier entry in the same request — each overlapping pair is reported once, on the later entry); the staff member is inactive. Back-to-back times don't overlap.
+
 ## Behavior
 
 - Validate everything first. If any record fails validation, return 400 with per-record errors and write nothing.
-- Process in order: partners → staff → workshops/sessions → moments → shifts.
+- Process in order: partners → staff → workshops/sessions → moments → shifts → assignments.
 - Never delete anything. Removal stays manual in the admin UI.
 - Partial updates: fields not in the payload are left alone. `null` explicitly clears a field.
 
@@ -157,7 +173,7 @@ alter table import_log enable row level security;
 
 ## Export
 
-`GET /api/admin/export?event=...` with the same auth. Returns the event's staff (no PINs), workshops + sessions with current registration counts, partners, moments, and shifts, in the same shape as the import body. Lets Claude diff before writing.
+`GET /api/admin/export?event=...` with the same auth. Returns the event's staff (no PINs), workshops + sessions with current registration counts, partners, moments, shifts, and shift/session assignments, in the same shape as the import body. Assignments that can't be expressed in import form (moment assignments, staff without an email) are counted in `export_notes` instead of listed; duplicate assignment rows are listed once. The import ignores `event_name` and `export_notes`, so an export posts back as a no-op. Lets Claude diff before writing.
 
 ## Testing
 

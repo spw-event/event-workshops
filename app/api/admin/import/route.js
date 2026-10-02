@@ -3,8 +3,8 @@ import { applyPlan, planImport, resultsForLog, summarize, validateInput } from '
 import { getSupabaseAdmin } from '@/lib/supabaseAdmin'
 
 // POST /api/admin/import — token-authenticated bulk load of staff, workshops +
-// sessions, partners, open moments and staff shifts for one event. Dry run
-// unless dry_run: false.
+// sessions, partners, open moments, staff shifts, and staff assignments for
+// one event. Dry run unless dry_run: false.
 // Spec: docs/admin-import-spec.md
 export async function POST(request) {
   const unauthorized = checkAuth(request)
