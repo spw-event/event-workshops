@@ -121,6 +121,17 @@ export default function AdminPage() {
   const [editingSessionId, setEditingSessionId] = useState(null)
   const [editSessionData, setEditSessionData] = useState({}) // { date, start_time, end_time, capacity }
   const [sessionEditMsg, setSessionEditMsg] = useState(null) // { id, type, text }
+  // The Program list is sorted by time, so a saved time change can move the
+  // session's card; remember it to scroll to and briefly highlight it.
+  const [justSavedSessionId, setJustSavedSessionId] = useState(null)
+  useEffect(() => {
+    if (!justSavedSessionId) return
+    const frame = requestAnimationFrame(() => {
+      document.getElementById('session-row-' + justSavedSessionId)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
+    const timer = setTimeout(() => setJustSavedSessionId(null), 4000)
+    return () => { cancelAnimationFrame(frame); clearTimeout(timer) }
+  }, [justSavedSessionId])
 
   const [openMoments, setOpenMoments] = useState([])
   const [newMoment, setNewMoment] = useState({ name: '', description: '', location: '', date: '', start_time: '', end_time: '', hours_text: '', moment_type: 'optional' })
@@ -841,6 +852,7 @@ const filteredGuests = guests.filter(g => {
     setEditSessionData({})
     setSessionEditMsg(null)
     await loadAll()
+    setJustSavedSessionId(session.id)
   }
 
   async function addInlineSession(workshopId) {
@@ -2403,10 +2415,18 @@ const filteredGuests = guests.filter(g => {
                             const enrolled = getEnrolled(s.id)
                             const isConfirmDelete = deleteConfirm['session_' + s.id]
                             const isEditing = editingSessionId === s.id
+                            const justSaved = justSavedSessionId === s.id
                             return (
-                              <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '8px 0', borderBottom: '0.5px solid #f2f2f2' }}>
+                              <div key={s.id} id={'session-row-' + s.id} style={{
+                                display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                                padding: justSaved ? '8px 8px' : '8px 0', margin: justSaved ? '0 -8px' : 0, borderRadius: 6,
+                                borderBottom: '0.5px solid #f2f2f2', background: justSaved ? '#FFF6DD' : 'transparent', transition: 'background 0.6s'
+                              }}>
                                 <div>
-                                  <div style={{ fontSize: 13, fontWeight: 500 }}>{s.date} · {formatTime(s.start_time)} – {formatTime(s.end_time)}</div>
+                                  <div style={{ fontSize: 13, fontWeight: 500 }}>
+                                    {s.date} · {formatTime(s.start_time)} – {formatTime(s.end_time)}
+                                    {justSaved && <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 600, color: '#1a7a4a' }}>✓ Saved</span>}
+                                  </div>
                                   <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>{enrolled}/{s.capacity} enrolled</div>
                                 </div>
                                 <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', flexShrink: 0 }}>
