@@ -67,7 +67,6 @@ Goal: let Claude (Cowork or Claude Code) load staff/vendor contacts, workshops +
   "instructor": "Byron Hughes",
   "location": "Workshop Area, Site 106",
   "description": "Hands-on charcoal cooking...",
-  "max_per_guest": 1,
   "credit_cost": 1,
   "sessions": [
     { "date": "2026-10-17", "start_time": "10:00", "end_time": "11:00", "capacity": 25 }
@@ -75,7 +74,7 @@ Goal: let Claude (Cowork or Claude Code) load staff/vendor contacts, workshops +
 }
 ```
 
-- Workshop match key: `name` (case-insensitive) + `instructor`. Defaults on create: `is_paid=false`, `price=0`, `max_per_guest=1`, `credit_cost=1`.
+- Workshop match key: `name` (case-insensitive) + `instructor`. Defaults on create: `is_paid=false`, `price=0`, `credit_cost=1`. (`max_per_guest` was removed — it was never enforced; older files that include it are accepted and it's ignored.)
 - Session match key: (event_id, workshop_id, date, start_time).
 - Session safety rules:
   - Never delete sessions.

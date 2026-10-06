@@ -39,7 +39,6 @@ export async function GET(request) {
           instructor: w.instructor,
           location: w.location,
           description: w.description,
-          max_per_guest: w.max_per_guest,
           credit_cost: w.credit_cost,
           sessions: []
         })

@@ -112,14 +112,15 @@ export default function AdminPage() {
   const [savingGuestTicket, setSavingGuestTicket] = useState(false)
 
   const [activityType, setActivityType] = useState('workshop') // 'workshop' | 'moment' — unified Program add form
-  const [newWorkshop, setNewWorkshop] = useState({ name: '', category: '', instructor: '', description: '', location: '', max_per_guest: 1, credit_cost: 1, date: '', start_time: '', end_time: '', capacity: 30 })
+  const [newWorkshop, setNewWorkshop] = useState({ name: '', category: '', instructor: '', description: '', location: '', credit_cost: 1, date: '', start_time: '', end_time: '', capacity: 30 })
   const [workshopMsg, setWorkshopMsg] = useState(null)
   const [addingWorkshop, setAddingWorkshop] = useState(false)
   const [editingWorkshop, setEditingWorkshop] = useState(null)
   const [editWorkshopData, setEditWorkshopData] = useState({})
   const [savingWorkshop, setSavingWorkshop] = useState(false)
-  const [editingCapacityId, setEditingCapacityId] = useState(null)
-  const [editCapacityValue, setEditCapacityValue] = useState('')
+  const [editingSessionId, setEditingSessionId] = useState(null)
+  const [editSessionData, setEditSessionData] = useState({}) // { date, start_time, end_time, capacity }
+  const [sessionEditMsg, setSessionEditMsg] = useState(null) // { id, type, text }
 
   const [openMoments, setOpenMoments] = useState([])
   const [newMoment, setNewMoment] = useState({ name: '', description: '', location: '', date: '', start_time: '', end_time: '', hours_text: '', moment_type: 'optional' })
@@ -765,7 +766,6 @@ const filteredGuests = guests.filter(g => {
       instructor: newWorkshop.instructor || null,
       location: newWorkshop.location || null,
       description: newWorkshop.description || null,
-      max_per_guest: parseInt(newWorkshop.max_per_guest) || 1,
       credit_cost: parseInt(newWorkshop.credit_cost) || 1,
       is_paid: false, price: 0
     }).select().single()
@@ -780,7 +780,7 @@ const filteredGuests = guests.filter(g => {
       })
       if (!sessErr) {
         setWorkshopMsg({ type: 'success', text: 'Workshop added.' })
-        setNewWorkshop({ name: '', category: '', instructor: '', description: '', location: '', max_per_guest: 1, credit_cost: 1, date: '', start_time: '', end_time: '', capacity: 30 })
+        setNewWorkshop({ name: '', category: '', instructor: '', description: '', location: '', credit_cost: 1, date: '', start_time: '', end_time: '', capacity: 30 })
         await loadAll()
       } else {
         setWorkshopMsg({ type: 'error', text: 'Workshop created, but could not add its time slot.' })
@@ -800,7 +800,6 @@ const filteredGuests = guests.filter(g => {
       instructor: editWorkshopData.instructor,
       location: editWorkshopData.location,
       description: editWorkshopData.description,
-      max_per_guest: parseInt(editWorkshopData.max_per_guest) || 1,
       credit_cost: parseInt(editWorkshopData.credit_cost) || 1
     }).eq('id', editingWorkshop.id)
     if (!error) {
@@ -813,15 +812,35 @@ const filteredGuests = guests.filter(g => {
     setSavingWorkshop(false)
   }
 
-  async function updateSessionCapacity(sessionId) {
-    const capacity = parseInt(editCapacityValue)
-    if (!capacity || capacity < 1) return
-    const { error } = await supabase.from('sessions').update({ capacity }).eq('id', sessionId)
-    if (!error) {
-      setEditingCapacityId(null)
-      setEditCapacityValue('')
-      await loadAll()
-    }
+  function startEditingSession(s) {
+    setEditingSessionId(s.id)
+    setEditSessionData({ date: s.date, start_time: s.start_time?.slice(0, 5) || '', end_time: s.end_time?.slice(0, 5) || '', capacity: String(s.capacity) })
+    setSessionEditMsg(null)
+  }
+
+  // Edits a session in place (date, times, capacity). Changing it here —
+  // rather than deleting and re-adding it, or re-importing with a new start
+  // time, which creates a second session — keeps its guest bookings and staff
+  // assignments attached.
+  async function updateSession(session) {
+    const { date, start_time, end_time } = editSessionData
+    const capacity = parseInt(editSessionData.capacity)
+    const fail = text => setSessionEditMsg({ id: session.id, type: 'error', text })
+    if (!date || !start_time || !end_time) return fail('Date, start time and end time are required.')
+    if (end_time <= start_time) return fail('End time must be after the start time.')
+    if (!capacity || capacity < 1) return fail('Capacity must be at least 1.')
+    const enrolled = getEnrolled(session.id)
+    if (capacity < enrolled) return fail(`${enrolled} spot${enrolled === 1 ? ' is' : 's are'} already booked, so capacity can't go below ${enrolled}.`)
+    const timeChanged = date !== session.date || start_time !== session.start_time?.slice(0, 5) || end_time !== session.end_time?.slice(0, 5)
+    if (timeChanged && enrolled > 0 && !window.confirm(
+      `${enrolled} guest spot${enrolled === 1 ? ' is' : 's are'} booked for this session. They'll see the new time in the app, but they won't be notified, and any calendar entries they downloaded keep the old time.\n\nChange the time anyway?`
+    )) return
+    const { error } = await supabase.from('sessions').update({ date, start_time, end_time, capacity }).eq('id', session.id)
+    if (error) return fail('Could not save: ' + error.message)
+    setEditingSessionId(null)
+    setEditSessionData({})
+    setSessionEditMsg(null)
+    await loadAll()
   }
 
   async function addInlineSession(workshopId) {
@@ -1296,7 +1315,6 @@ const filteredGuests = guests.filter(g => {
             instructor: workshop.instructor,
             location: workshop.location,
             description: workshop.description,
-            max_per_guest: workshop.max_per_guest,
             is_paid: workshop.is_paid,
             price: workshop.price
           }).select().single()
@@ -2204,10 +2222,6 @@ const filteredGuests = guests.filter(g => {
                   </div>
                 ))}
                 <div style={fw}>
-                  <label style={lbl}>Max per guest</label>
-                  <input type="number" min="1" value={newWorkshop.max_per_guest} onChange={e => setNewWorkshop(w => ({ ...w, max_per_guest: e.target.value }))} style={{ ...inp, width: 100 }} />
-                </div>
-                <div style={fw}>
                   <label style={lbl}>Cost per person (credits)</label>
                   <input type="number" min="1" value={newWorkshop.credit_cost} onChange={e => setNewWorkshop(w => ({ ...w, credit_cost: e.target.value }))} style={{ ...inp, width: 100 }} />
                 </div>
@@ -2354,10 +2368,6 @@ const filteredGuests = guests.filter(g => {
                           </div>
                         ))}
                         <div style={fw}>
-                          <label style={lbl}>Max per guest</label>
-                          <input type="number" min="1" value={editWorkshopData.max_per_guest ?? 1} onChange={e => setEditWorkshopData(d => ({ ...d, max_per_guest: e.target.value }))} style={{ ...inp, width: 100 }} />
-                        </div>
-                        <div style={fw}>
                           <label style={lbl}>Cost per person (credits)</label>
                           <input type="number" min="1" value={editWorkshopData.credit_cost ?? 1} onChange={e => setEditWorkshopData(d => ({ ...d, credit_cost: e.target.value }))} style={{ ...inp, width: 100 }} />
                         </div>
@@ -2384,7 +2394,7 @@ const filteredGuests = guests.filter(g => {
                             </div>
                             {w?.description && <div style={{ fontSize: 12, color: '#aaa' }}>{w.description}</div>}
                           </div>
-                          <button onClick={() => { setEditingWorkshop(w); setEditWorkshopData({ name: w.name, category: w.category || '', instructor: w.instructor || '', location: w.location || '', description: w.description || '', max_per_guest: w.max_per_guest || 1, credit_cost: w.credit_cost || 1 }); setWorkshopMsg(null) }} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px', flexShrink: 0 }}>Edit</button>
+                          <button onClick={() => { setEditingWorkshop(w); setEditWorkshopData({ name: w.name, category: w.category || '', instructor: w.instructor || '', location: w.location || '', description: w.description || '', credit_cost: w.credit_cost || 1 }); setWorkshopMsg(null) }} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px', flexShrink: 0 }}>Edit</button>
                         </div>
 
                         {/* Sessions list */}
@@ -2392,7 +2402,7 @@ const filteredGuests = guests.filter(g => {
                           {row.sessions.map(s => {
                             const enrolled = getEnrolled(s.id)
                             const isConfirmDelete = deleteConfirm['session_' + s.id]
-                            const isEditingCap = editingCapacityId === s.id
+                            const isEditing = editingSessionId === s.id
                             return (
                               <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '8px 0', borderBottom: '0.5px solid #f2f2f2' }}>
                                 <div>
@@ -2400,14 +2410,8 @@ const filteredGuests = guests.filter(g => {
                                   <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>{enrolled}/{s.capacity} enrolled</div>
                                 </div>
                                 <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', flexShrink: 0 }}>
-                                  {isEditingCap ? (
-                                    <>
-                                      <input type="number" min="1" value={editCapacityValue} onChange={e => setEditCapacityValue(e.target.value)} style={{ ...inp, width: 70, padding: '5px 8px' }} />
-                                      <button onClick={() => updateSessionCapacity(s.id)} style={{ ...btn('#1a1a1a', '#fff'), fontSize: 11, padding: '4px 10px' }}>Save</button>
-                                      <button onClick={() => { setEditingCapacityId(null); setEditCapacityValue('') }} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px' }}>Cancel</button>
-                                    </>
-                                  ) : (
-                                    <button onClick={() => { setEditingCapacityId(s.id); setEditCapacityValue(String(s.capacity)) }} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px' }}>Edit capacity</button>
+                                  {!isEditing && (
+                                    <button onClick={() => startEditingSession(s)} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px' }}>Edit</button>
                                   )}
                                   {!isConfirmDelete ? (
                                     <button onClick={() => setDeleteConfirm(d => ({ ...d, ['session_' + s.id]: true }))} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px', color: '#c0392b', borderColor: '#f5c0c0' }}>Delete</button>
@@ -2418,6 +2422,36 @@ const filteredGuests = guests.filter(g => {
                                     </div>
                                   )}
                                 </div>
+                                {isEditing && (
+                                  <div style={{ flexBasis: '100%', marginTop: 6, padding: 12, background: '#f9f9f9', borderRadius: 8 }}>
+                                    {sessionEditMsg?.id === s.id && <Msg msg={sessionEditMsg} />}
+                                    <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                                      <div>
+                                        <label style={lbl}>Date</label>
+                                        <input type="date" value={editSessionData.date || ''} onChange={e => setEditSessionData(d => ({ ...d, date: e.target.value }))} style={{ ...inp, width: 'auto', marginBottom: 0 }} />
+                                      </div>
+                                      <div>
+                                        <label style={lbl}>Start</label>
+                                        <input type="time" value={editSessionData.start_time || ''} onChange={e => setEditSessionData(d => ({ ...d, start_time: e.target.value }))} style={{ ...inp, width: 'auto', marginBottom: 0 }} />
+                                      </div>
+                                      <div>
+                                        <label style={lbl}>End</label>
+                                        <input type="time" value={editSessionData.end_time || ''} onChange={e => setEditSessionData(d => ({ ...d, end_time: e.target.value }))} style={{ ...inp, width: 'auto', marginBottom: 0 }} />
+                                      </div>
+                                      <div>
+                                        <label style={lbl}>Capacity</label>
+                                        <input type="number" min={Math.max(1, enrolled)} value={editSessionData.capacity || ''} onChange={e => setEditSessionData(d => ({ ...d, capacity: e.target.value }))} style={{ ...inp, width: 80, marginBottom: 0 }} />
+                                      </div>
+                                      <button onClick={() => updateSession(s)} style={{ ...btn('#1a1a1a', '#fff'), fontSize: 12 }}>Save</button>
+                                      <button onClick={() => { setEditingSessionId(null); setEditSessionData({}); setSessionEditMsg(null) }} style={{ ...btn('#fff'), fontSize: 12 }}>Cancel</button>
+                                    </div>
+                                    {enrolled > 0 && (
+                                      <div style={{ fontSize: 11, color: '#9a5a18', marginTop: 8 }}>
+                                        {enrolled} spot{enrolled === 1 ? ' is' : 's are'} booked. Booked guests and assigned staff stay on this session if you change the time, but nobody is notified.
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
                               </div>
                             )
                           })}
