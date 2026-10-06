@@ -98,6 +98,10 @@ export default function AdminPage() {
   const [deleteConfirm, setDeleteConfirm] = useState({})
   const [guestSearch, setGuestSearch] = useState('')
   const [adjustingGuest, setAdjustingGuest] = useState(null)
+  const [earlyAccessGuest, setEarlyAccessGuest] = useState(null) // guest id whose early-access panel is open
+  const [earlyAccessValue, setEarlyAccessValue] = useState('')
+  const [earlyAccessMsg, setEarlyAccessMsg] = useState(null)
+  const [savingEarlyAccess, setSavingEarlyAccess] = useState(false)
   const [newCreditsAvail, setNewCreditsAvail] = useState(0)
   const [newCreditNotes, setNewCreditNotes] = useState('')
   const [newBookingSummary, setNewBookingSummary] = useState('')
@@ -628,6 +632,38 @@ const filteredGuests = guests.filter(g => {
       setGuestTicketMsg({ type: 'error', text: 'Could not update ticket type.' })
     }
     setSavingGuestTicket(false)
+  }
+
+  // Early access: this guest can book from `value` instead of the event's
+  // opening time. Stored like events.registration_opens_at — datetime-local
+  // digits meaning wall-clock time in the event's timezone — and enforced by
+  // guest_register() in the database, not just here. null removes it.
+  async function saveEarlyAccess(guest, value) {
+    if (!selectedEvent) return
+    if (value) {
+      // A bare "YYYY-MM-DDTHH:MM" would parse as browser-local time; label the
+      // digits UTC the way they come back from the database.
+      const early = resolveRegistrationOpenTime({ registration_opens_at: value + ':00Z', registration_timezone: selectedEvent.registration_timezone })
+      const opens = resolveRegistrationOpenTime(selectedEvent)
+      if (opens && early >= opens) {
+        setEarlyAccessMsg({ type: 'error', text: 'Early access has to be before the event opens (' + formatOpensAt(selectedEvent).replace('Opens: ', '') + ').' })
+        return
+      }
+    }
+    setSavingEarlyAccess(true)
+    const { error } = await supabase
+      .from('guest_events')
+      .update({ early_access_opens_at: value || null })
+      .eq('guest_id', guest.id)
+      .eq('event_id', selectedEvent.id)
+    setSavingEarlyAccess(false)
+    if (error) {
+      setEarlyAccessMsg({ type: 'error', text: 'Could not save: ' + error.message })
+      return
+    }
+    setEarlyAccessGuest(null)
+    setEarlyAccessMsg(null)
+    await loadAll()
   }
 
   async function saveCredits(guest) {
@@ -2007,6 +2043,13 @@ const filteredGuests = guests.filter(g => {
                         {guestEvent?.booking_summary && (
                           <div style={{ fontSize: 12, color: '#9a5a18', marginTop: 4 }}>📋 {guestEvent.booking_summary}</div>
                         )}
+                        {guestEvent?.early_access_opens_at && selectedEvent?.registration_opens_at && (
+                          <div style={{ marginTop: 4 }}>
+                            <span style={{ fontSize: 10, fontWeight: 600, padding: '2px 7px', borderRadius: 10, background: '#EEF0F8', color: '#2060B0', border: '0.5px solid #c0cdea' }}>
+                              {formatOpensAt({ registration_opens_at: guestEvent.early_access_opens_at, registration_timezone: selectedEvent.registration_timezone }).replace('Opens: ', 'Early access: ')}
+                            </span>
+                          </div>
+                        )}
                         {gRegs.length > 0 && (
                           <div style={{ fontSize: 11, color: '#1a7a4a', marginTop: 4 }}>
                             ✓ {gRegs.map(r => r.sessions?.workshops?.name + (r.party_size > 1 ? ' ×' + r.party_size : '')).join(', ')}
@@ -2014,7 +2057,7 @@ const filteredGuests = guests.filter(g => {
                         )}
                       </div>
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-                        {isRegistrationOpenForEvent(selectedEvent) ? (
+                        {isRegistrationOpenForEvent(selectedEvent) || guestEvent?.early_access_opens_at ? (
                           <button onClick={() => { const base = window.location.origin.replace('/admin', ''); navigator.clipboard.writeText(base + '?token=' + guest.token + (selectedEvent ? '&event=' + selectedEvent.id : '')) }} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px' }}>
                             Copy link
                           </button>
@@ -2027,6 +2070,11 @@ const filteredGuests = guests.filter(g => {
                         <button onClick={() => { setAdjustingGuest(guest); setNewCreditsAvail(total); setNewCreditNotes(guestEvent?.credit_notes || ''); setNewBookingSummary(guestEvent?.booking_summary || ''); setCreditsMsg(null) }} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px' }}>
                           Credits
                         </button>
+                        {selectedEvent?.registration_opens_at && (
+                          <button onClick={() => { setEarlyAccessGuest(guest.id); setEarlyAccessValue(guestEvent?.early_access_opens_at?.slice(0, 16) || ''); setEarlyAccessMsg(null) }} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px' }}>
+                            Early access
+                          </button>
+                        )}
                         {!isDeleting ? (
                           <button onClick={() => setDeleteConfirm(d => ({ ...d, [guest.id]: '' }))} style={{ ...btn('#fff'), fontSize: 11, padding: '4px 10px', color: '#c0392b', borderColor: '#f5c0c0' }}>Delete</button>
                         ) : (
@@ -2083,6 +2131,26 @@ const filteredGuests = guests.filter(g => {
                           <label style={lbl}>Booking summary (shown to guest)</label>
                           <input type="text" value={newBookingSummary} onChange={e => setNewBookingSummary(e.target.value)}
                             placeholder="e.g. 2 sites: Large + Jyubako" style={inp} />
+                        </div>
+                      </div>
+                    )}
+                    {earlyAccessGuest === guest.id && (
+                      <div style={{ marginTop: 12, padding: 12, background: '#f9f9f9', borderRadius: 8 }}>
+                        <div style={{ fontSize: 13, marginBottom: 4 }}>Early access for {guest.name} at {selectedEvent?.name}</div>
+                        <div style={{ fontSize: 11, color: '#888', marginBottom: 10 }}>
+                          They can book workshops from this time instead of the event&apos;s opening ({formatOpensAt(selectedEvent).replace('Opens: ', '')}). Time is in the event&apos;s timezone.
+                        </div>
+                        <Msg msg={earlyAccessMsg} />
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <input type="datetime-local" value={earlyAccessValue} onChange={e => { setEarlyAccessValue(e.target.value); setEarlyAccessMsg(null) }}
+                            style={{ ...inp, width: 'auto', marginBottom: 0 }} />
+                          <button onClick={() => saveEarlyAccess(guest, earlyAccessValue)} disabled={savingEarlyAccess || !earlyAccessValue} style={btn('#1a1a1a', '#fff')}>
+                            {savingEarlyAccess ? 'Saving...' : 'Save'}
+                          </button>
+                          {guestEvent?.early_access_opens_at && (
+                            <button onClick={() => saveEarlyAccess(guest, null)} disabled={savingEarlyAccess} style={{ ...btn('#fff'), color: '#c0392b' }}>Remove early access</button>
+                          )}
+                          <button onClick={() => { setEarlyAccessGuest(null); setEarlyAccessMsg(null) }} style={btn('#fff')}>Cancel</button>
                         </div>
                       </div>
                     )}

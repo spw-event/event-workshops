@@ -57,6 +57,19 @@ function resolveRegistrationOpenTime(event) {
   return new Date(guessUtc + (guessUtc - shownAsUtc))
 }
 
+// This guest's own opening time: the earlier of the event's and their early
+// access time (guest_events.early_access_opens_at, same wall-clock-in-event-
+// timezone convention). guest_register() enforces the same rule.
+function resolveGuestOpenTime(event, guestEvent) {
+  const eventOpens = resolveRegistrationOpenTime(event)
+  if (!eventOpens || !guestEvent?.early_access_opens_at) return eventOpens
+  const early = resolveRegistrationOpenTime({
+    registration_opens_at: guestEvent.early_access_opens_at,
+    registration_timezone: event.registration_timezone
+  })
+  return early < eventOpens ? early : eventOpens
+}
+
 const SCHEDULE_CACHE_KEY = 'spw_schedule_cache'
 
 // Schedule-only snapshot for offline fallback (a lighter-weight sibling of
@@ -498,19 +511,19 @@ export default function Home() {
     }
     setSelectedEvent(activeEvent)
 
+    // Load guest_event record for credits (and any early access time)
+    const geRecord = guestEvents?.find(ge => ge.event_id === activeEvent.id)
+    setGuestEvent(geRecord || null)
+
     // Check registration open time
     if (activeEvent.registration_opens_at) {
-      const opensDate = resolveRegistrationOpenTime(activeEvent)
+      const opensDate = resolveGuestOpenTime(activeEvent, geRecord)
       const now = new Date()
       if (now < opensDate) {
         setRegistrationOpen(false)
         setOpensAt(opensDate)
       }
     }
-
-    // Load guest_event record for credits
-    const geRecord = guestEvents?.find(ge => ge.event_id === activeEvent.id)
-    setGuestEvent(geRecord || null)
 
     await loadEventData(guestData, activeEvent, cacheKey, {
       guest: guestData, events, guestEvent: geRecord || null,
@@ -832,8 +845,12 @@ export default function Home() {
     setInfoSections([])
     setMessage(null)
 
+    const { data: session } = await supabase.rpc('guest_session', { p_token: guest.token })
+    const geRecord = session?.guest_events?.find(ge => ge.event_id === event.id) || null
+    setGuestEvent(geRecord)
+
     if (event.registration_opens_at) {
-      const opensDate = resolveRegistrationOpenTime(event)
+      const opensDate = resolveGuestOpenTime(event, geRecord)
       const now = new Date()
       setRegistrationOpen(now >= opensDate)
       setOpensAt(opensDate)
@@ -841,9 +858,6 @@ export default function Home() {
       setRegistrationOpen(true)
       setOpensAt(null)
     }
-
-    const { data: session } = await supabase.rpc('guest_session', { p_token: guest.token })
-    setGuestEvent(session?.guest_events?.find(ge => ge.event_id === event.id) || null)
 
     await loadEventData(guest, event)
   }
@@ -905,6 +919,10 @@ export default function Home() {
       // remaining credits between our last refresh and this click.
       setMessage({ type: 'error', text: 'Not enough credits remaining for that many people.' })
       await refreshAll()
+    } else if (regError.message?.includes('REGISTRATION_NOT_OPEN')) {
+      // The database's opening-time check (event time, or this guest's early
+      // access time) disagreed with the page — e.g. a device clock that's ahead.
+      setMessage({ type: 'error', text: "Registration isn't open yet for you. Please try again at your opening time." })
     } else {
       setMessage({ type: 'error', text: 'Could not register. Please try again.' })
     }
