@@ -249,6 +249,31 @@ export default function StaffPage() {
     return null
   }
 
+  // Everyone else on the same session/moment/shift — direct assignments, plus
+  // vendors with workshop-wide coverage for sessions — for My Agenda cards.
+  function getCoStaff(a, info) {
+    let rows = []
+    if (info.sessionId) {
+      rows = allStaffAssignments.filter(x => x.session_id === info.sessionId)
+      const workshopId = allSessions.find(s => s.id === info.sessionId)?.workshop_id
+      if (workshopId) rows = rows.concat(allWorkshopAssns.filter(x => x.workshop_id === workshopId))
+    } else if (info.momentId) {
+      rows = allStaffAssignments.filter(x => x.moment_id === info.momentId)
+    } else {
+      const shiftId = a.shift_id || a.staff_shifts?.id
+      if (shiftId) rows = allStaffAssignments.filter(x => x.shift_id === shiftId)
+    }
+    const seen = new Set()
+    const others = []
+    for (const row of rows) {
+      const person = row.staff
+      if (!person || person.id === staffMember?.id || seen.has(person.id)) continue
+      seen.add(person.id)
+      others.push(person)
+    }
+    return others.sort((x, y) => x.name.localeCompare(y.name))
+  }
+
   function groupByDate(assignments) {
     const groups = {}
     assignments.forEach(a => {
@@ -1183,6 +1208,16 @@ export default function StaffPage() {
                 const totalGuests = sessionRegs.reduce((s, r) => s + (r.party_size || 1), 0)
                 const isExpanded = expandedRosters[a.id]
                 const lookupOpen = activeGuestLookup === a.id
+                // The assignment query only carries a few columns; the full
+                // schedule data has instructor, description and staff notes.
+                const fullSession = info.sessionId ? allSessions.find(s => s.id === info.sessionId) : null
+                const fullMoment = info.momentId ? allMoments.find(m => m.id === info.momentId) : null
+                const workshop = fullSession?.workshops
+                const description = workshop?.description || fullMoment?.description || null
+                const staffNotes = info.activityNotes || fullSession?.staff_notes || fullMoment?.staff_notes || null
+                const coStaff = getCoStaff(a, info)
+                const detailsKey = 'agenda_' + a.id
+                const detailsOpen = !!expandedNotes[detailsKey]
                 return (
                   <div key={a.id} style={{
                     ...card,
@@ -1195,11 +1230,38 @@ export default function StaffPage() {
                     </div>
                     <div style={{ fontSize: 15, fontWeight: 500, marginBottom: info.location ? 4 : 0 }}>{info.title}</div>
                     {info.location && <div style={{ fontSize: 13, color: '#8C8C8C' }}>📍 {info.location}</div>}
-                    {info.activityNotes && (
-                      <div style={{ fontSize: 13, color: '#8C8C8C', marginTop: 8, paddingTop: 8, borderTop: '0.5px solid #F0EDE8', lineHeight: 1.55, fontStyle: 'italic' }}>
-                        {info.activityNotes}
+                    {workshop?.instructor && <div style={{ fontSize: 13, color: '#8C8C8C', marginTop: 2 }}>Led by {workshop.instructor}</div>}
+                    {staffNotes && (
+                      <div style={{ fontSize: 13, color: '#8C8C8C', marginTop: 8, paddingTop: 8, borderTop: '0.5px solid #F0EDE8', lineHeight: 1.55, fontStyle: 'italic', whiteSpace: 'pre-line' }}>
+                        {staffNotes}
                       </div>
                     )}
+                    {description && (
+                      <div style={{ marginTop: 8 }}>
+                        <button onClick={() => setExpandedNotes(n => ({ ...n, [detailsKey]: !detailsOpen }))}
+                          style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#8C8C8C', fontSize: 12, padding: 0 }}>
+                          Details {detailsOpen ? '▾' : '▸'}
+                        </button>
+                        {detailsOpen && (
+                          <div style={{ fontSize: 13, color: '#555', marginTop: 6, lineHeight: 1.55, whiteSpace: 'pre-line' }}>{description}</div>
+                        )}
+                      </div>
+                    )}
+                    <div style={{ marginTop: 10, paddingTop: 10, borderTop: '0.5px solid #F0EDE8' }}>
+                      <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#8C8C8C', marginBottom: 6 }}>Also on this</div>
+                      {coStaff.length === 0 ? (
+                        <span style={{ fontSize: 12, color: '#aaa' }}>Only you</span>
+                      ) : (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                          {coStaff.map(person => (
+                            <span key={person.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 10px', borderRadius: 20, fontSize: 12, background: '#F0EDE8', color: '#555' }}>
+                              {person.name}
+                              {person.is_vendor && <span style={{ fontSize: 9, fontWeight: 600, letterSpacing: '0.04em', textTransform: 'uppercase', opacity: 0.75 }}>Partner</span>}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                     {info.sessionId && (
                       <div style={{ marginTop: 10, paddingTop: 10, borderTop: '0.5px solid #F0EDE8' }}>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
